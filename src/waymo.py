@@ -28,7 +28,9 @@ import time
 # Path to the directory with all components
 
 # BUGBUG -- playing with the testing data because it's much smaller than the full training set
-dataset_dir = "/home/bjgilhul/data/waymo/test"
+dataset_dir = "./test/v2"
+
+waymo_v2_training_bucket = "gs://waymo_open_dataset_v_2_0_1/training/"
 
 
 def load_context_names(dataset_dir: str, tag: str) -> list:
@@ -83,7 +85,8 @@ def show_point_cloud(points: np.ndarray) -> None:
     vis.run()
 
 
-context_name_list = load_context_names(dataset_dir, "lidar")
+tag_list = os.listdir(dataset_dir)
+context_name_list = load_context_names(dataset_dir, tag_list[0])
 
 for context in context_name_list:
 
