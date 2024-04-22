@@ -152,11 +152,10 @@ def convert_range_image_to_2D(frame, range_images, range_image_index, range_imag
             tf.clip_by_value((tf.atan2(points[:, 1], points[:, 0]) + np.pi), 0, np.pi * 2.0) / LIDAR_INCREMENT
         )
 
-        # the top lidar has some odd holes -- ignore them
-        if calibration.name == 1:
-            valid_range_mask = tf.math.logical_and(point_ranges > 10, point_ranges < LIDAR_RANGE)
-            point_ranges = tf.boolean_mask(point_ranges, valid_range_mask)
-            point_angles = tf.boolean_mask(point_angles, valid_range_mask)
+        # if calibration.name != 1:
+        #     valid_range_mask = tf.math.logical_and(point_ranges > 10, point_ranges < LIDAR_RANGE)
+        #     point_ranges = tf.boolean_mask(point_ranges, valid_range_mask)
+        #     point_angles = tf.boolean_mask(point_angles, valid_range_mask)
 
         point_angles = tf.cast(point_angles, tf.int32)
 
@@ -263,13 +262,13 @@ def main():
 
         # # calculate the current yaw
         frame_transform = np.reshape(np.array(frame.pose.transform), [4, 4])
-        # rotated = np.dot(frame_transform, np.array([1, 0, 0, 0]))
-        # yaw = np.arctan2(rotated[1], rotated[0]).astype(np.float32)
+        rotated = np.dot(frame_transform, np.array([1, 0, 0, 0]))
+        yaw = np.arctan2(rotated[1], rotated[0]).astype(np.float32)
 
         # update the occupancy grid
-        grid_data = lmg.generateGrid(VectorFloat(ranges), 0)
-        # dogm.updateGrid(grid_data, frame_transform[0, 3], frame_transform[1, 3], 0.1)
-        dogm.updateGrid(grid_data, 0, 0, 0.1)
+        grid_data = lmg.generateGrid(VectorFloat(ranges), np.rad2deg(yaw))
+        dogm.updateGrid(grid_data, frame_transform[0, 3], frame_transform[1, 3], 0.1)
+        # dogm.updateGrid(grid_data, 0, 0, 0.1)
 
         # render the occupancy grid
         current_occ_grid = renderOccupancyGrid(dogm)
