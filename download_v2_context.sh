@@ -7,7 +7,8 @@ if [ "$context" = "" ]; then
 fi
 
 cache_dir="./test/v2"
-WaymoTrainingBucket="gs://waymo_open_dataset_v_2_0_1/training"
+version="2_0_1"
+WaymoTrainingBucket="gs://waymo_open_dataset_v_$version/training"
 
 # tag_list = (
 #     "camera_box"
@@ -39,21 +40,21 @@ tags=(
      "camera_to_lidar_box_association"
      "lidar"
      "lidar_box"
-#     "lidar_camera_synced_box"
-#     "lidar_calibration"
+     "lidar_camera_synced_box"
+     "lidar_calibration"
      "lidar_pose"
-#     "lidar_hkp"
-#     "lidar_camera_projection"
+     "lidar_hkp"
+     "lidar_camera_projection"
      "lidar_segmentation"
-#     "projected_lidar_box"
+     "projected_lidar_box"
      "stats"
      "vehicle_pose"
     )
 
 for tag in "${tags[@]}"
 do
-    mkdir -p $cache_dir/$tag
-    gsutil -m cp gs://waymo_open_dataset_v_2_0_1/training/$tag/$context.parquet $cache_dir/$tag/$context.parquet
+    mkdir -p $cache_dir/$version/$tag
+    gsutil -m cp gs://waymo_open_dataset_v_$version/training/$tag/$context.parquet $cache_dir/perception/$version/training/$tag/$context.parquet
 done
 
 

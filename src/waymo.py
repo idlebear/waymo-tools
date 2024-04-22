@@ -28,9 +28,7 @@ import time
 # Path to the directory with all components
 
 # BUGBUG -- playing with the testing data because it's much smaller than the full training set
-dataset_dir = "./test/v2"
-
-waymo_v2_training_bucket = "gs://waymo_open_dataset_v_2_0_1/training/"
+dataset_dir = "./test/v2/2_0_1/training"
 
 
 def load_context_names(dataset_dir: str, tag: str) -> list:
@@ -110,6 +108,9 @@ for context in context_name_list:
     lidar_calibration = v2.LiDARCalibrationComponent.from_dict(
         lidar_calibration_df.loc[lidar_calibration_df["key.laser_name"] == 1].compute().iloc[0]
     )
+
+    stats_df = read(dataset_dir=dataset_dir, context_str=context, tag="stats")
+
 
     component_load_end = time.time()
 
