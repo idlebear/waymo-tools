@@ -6,7 +6,7 @@ if [ "$context" = "" ]; then
     exit 1
 fi
 
-cache_dir="./test/v2"
+cache_dir="./cache/v2"
 version="2_0_1"
 WaymoTrainingBucket="gs://waymo_open_dataset_v_$version/training"
 
@@ -53,7 +53,7 @@ tags=(
 
 for tag in "${tags[@]}"
 do
-    mkdir -p $cache_dir/$version/$tag
+    mkdir -p $cache_dir/perception/$version/training/$tag
     gsutil -m cp gs://waymo_open_dataset_v_$version/training/$tag/$context.parquet $cache_dir/perception/$version/training/$tag/$context.parquet
 done
 

@@ -7,7 +7,7 @@ if [ "$context" = "" ]; then
 fi
 
 version="1_4_3"
-cache_dir="./test/v1/perception/${version}/training"
+cache_dir="./cache/v1/perception/${version}/training"
 WaymoTrainingBucket="gs://waymo_open_dataset_v_${version}/individual_files/training"
 
 mkdir -p $cache_dir

@@ -27,14 +27,14 @@ from dogm_py import renderMeasurement
 FIG_LIDAR_MAP = 1
 FIG_OCCUPANCY_GRID = 2
 
-DEFAULT_CACHE = "./test/v1/perception/1_4_3/training"
+DEFAULT_CACHE = "./cache/v1/perception/1_4_3/training"
 
 LIDAR_RANGE = 75.0
 LIDAR_RAYS = 2650.0
 LIDAR_INCREMENT = (np.pi * 2.0) / LIDAR_RAYS
 
 GRID_WIDTH = 2 * LIDAR_RANGE
-GRID_CELL_WIDTH = 0.5
+GRID_CELL_WIDTH = 0.25
 GRID_SIZE = int(GRID_WIDTH / GRID_CELL_WIDTH)
 
 LIDAR_LOWER_X_BOUND = -GRID_WIDTH / 2
@@ -120,7 +120,8 @@ def convert_range_image_to_2D(frame, range_images, range_image_index, range_imag
     # initialize a tensor to hold the ranges
     # ranges = np.ones(num_buckets) * np.inf
     # # Create an n x 1 tensor of inf values
-    ranges = tf.fill([num_buckets], float("inf"))
+    # ranges = tf.fill([num_buckets], float("inf"))
+    ranges = tf.fill([num_buckets], float(LIDAR_RANGE + 1))
 
     cartesian_points = frame_utils.convert_range_image_to_cartesian(
         frame, range_images, range_image_top_poses, range_image_index, keep_polar_features=False
