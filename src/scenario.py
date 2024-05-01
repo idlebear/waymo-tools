@@ -87,6 +87,8 @@ class Scenario:
         rotated = np.dot(frame_transform[0:3, 0:3], np.array([1, 0, 0]))
         yaw = np.arctan2(rotated[1], rotated[0]).astype(np.float32)
 
+        print(f"Yaw: {yaw}")
+
         dt = frame.timestamp_micros - self.last_time if self.last_time is not None else 0
         self.t += dt
         self.last_time = frame.timestamp_micros
@@ -99,13 +101,14 @@ class Scenario:
 
             agent = {
                 "centre": agent_pos[:3],
-                "size": (obj.box.width, obj.box.length, obj.box.height),
-                "yaw": obj.box.heading,
+                "size": (obj.box.length, obj.box.width, obj.box.height),
+                "yaw": obj.box.heading + yaw,
                 "type": obj.type,
                 "top_lidar_points": obj.num_top_lidar_points_in_box,
                 "lidar_points": obj.num_lidar_points_in_box,
             }
             agents.append(agent)
+            print(f"Agent: {agent['centre']}, {agent['size']}, {agent['yaw']}, {agent['type']}")
 
         result = {
             "t": self.t,
