@@ -274,11 +274,11 @@ def calculate_information_gain(
                 map_img[y, x, :] = 255
 
         fig = plt.figure(FIG_VISIBILITY)
-        plt.imshow(map_img)
+        plt.imshow(np.flipud(map_img))
         plt.show(block=False)
 
 
-def draw_agent(map, origin, resolution, centre, size, yaw):
+def draw_agent(map, origin, resolution, centre, size, yaw, visibility):
 
     size_y, size_x = map.shape
 
@@ -297,7 +297,7 @@ def draw_agent(map, origin, resolution, centre, size, yaw):
             _x = int(x + dx * cos_yaw - dy * sin_yaw)
             _y = int(y + dx * sin_yaw + dy * cos_yaw)
             if _x >= 0 and _x < GRID_SIZE and _y >= 0 and _y < GRID_SIZE:
-                map[_y, _x] = 1
+                map[_y, _x] = visibility
 
 
 def main():
@@ -383,7 +383,15 @@ def main():
 
         # draw in the agents
         for agent in data["agents"]:
-            draw_agent(dyn_occ_grid, data["pos"], GRID_CELL_WIDTH, agent["centre"], agent["size"], agent["yaw"])
+            draw_agent(
+                dyn_occ_grid,
+                data["pos"],
+                GRID_CELL_WIDTH,
+                agent["centre"],
+                agent["size"],
+                agent["yaw"],
+                min(1.0, agent["top_lidar_points"] / 1000),
+            )
 
         stage2 = time.time()
         print(f"    Occupancy grid update time: {stage2 - stage1:.3f} seconds")
@@ -432,13 +440,13 @@ def main():
                 for artist in bev_traj_artist:
                     bev_ax.draw_artist(artist[0])
                 bev_fig.canvas.blit(bev_ax.bbox)
-                bev_fig.canvas.flush_events()
+                # bev_fig.canvas.flush_events()
 
             # render the occupancy grids
             # occ_img = Image.fromarray((map * 255).astype(np.uint8)).convert("RGB")
             # ref_im.set_data(occ_img)
 
-            map_img = Image.fromarray(((1 - dyn_occ_grid) * 255).astype(np.uint8)).convert("RGB")
+            map_img = Image.fromarray(((1 - np.flipud(dyn_occ_grid)) * 255).astype(np.uint8)).convert("RGB")
             map_im.set_data(map_img)
 
             now = time.time()

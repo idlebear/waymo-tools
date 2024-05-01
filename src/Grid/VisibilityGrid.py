@@ -129,7 +129,7 @@ class VisibilityGrid:
             self.grid_img = self.grid_ax.imshow(np.zeros((GRID_SIZE, GRID_SIZE, 3), dtype=np.uint8))
             plt.show(block=False)
 
-        img = Image.fromarray(((1.0 - self.grid) * 255.0).astype(np.uint8)).convert("RGB")
+        img = Image.fromarray(((1.0 - np.flipud(self.grid)) * 255.0).astype(np.uint8)).convert("RGB")
         self.grid_img.set_data(img)
 
         # self.grid_fig.canvas.draw()
