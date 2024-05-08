@@ -17,6 +17,23 @@ from PIL import Image
 import tensorrt
 import tensorflow as tf
 
+all_gpus = tf.config.experimental.list_physical_devices("GPU")
+if all_gpus:
+    try:
+        for cur_gpu in all_gpus:
+            # BUGBUG - hack to limit tensorflow memory usage
+            tf.config.experimental.set_memory_growth(cur_gpu, True)
+            tf.config.experimental.set_virtual_device_configuration(
+                cur_gpu, [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1024 * 4)]
+            )
+
+    except RuntimeError as e:
+        print(e)
+
+from controller.controller import init_controller, get_control
+from controller.validate import draw_agent, visualize_variations, visualize_controls
+
+
 gpus = tf.config.experimental.list_physical_devices("GPU")
 if gpus:
     try:
@@ -84,6 +101,32 @@ def parse_args():
     )
     parser.add_argument("--seed", type=int, default=None, help="Seed for random number generation")
     parser.add_argument("--context", type=str, default=None, help="Name of the context")
+    parser.add_argument(
+        "--planning_time", metavar="horizon", default=3, type=int, help="Time horizon for planning (seconds)"
+    )
+    parser.add_argument(
+        "--samples", type=int, default=1000, help="Number of MPPI samples to generate for each control input"
+    )
+    parser.add_argument(
+        "--c_lambda", type=float, default=DEFAULT_LAMBDA, help="Lambda value for weight normalization control"
+    )
+    parser.add_argument(
+        "--method",
+        metavar="method",
+        default="None",
+        action="store",
+        choices=["Ignore", "None", "Ours", "Higgins", "Andersen"],
+        help="Method options",
+    )
+    parser.add_argument("--mppi_m", type=float, default=DEFAULT_METHOD_WEIGHT, help="M/Lambda value for method weights")
+    parser.add_argument("--x_weight", type=float, default=X_WEIGHT, help="Weight for x coordinate")
+    parser.add_argument("--y_weight", type=float, default=Y_WEIGHT, help="Weight for y coordinate")
+    parser.add_argument("--v_weight", type=float, default=V_WEIGHT, help="Weight for velocity")
+    parser.add_argument("--theta_weight", type=float, default=THETA_WEIGHT, help="Weight for theta")
+    parser.add_argument("--a_weight", type=float, default=A_WEIGHT, help="Weight for acceleration")
+    parser.add_argument("--delta_weight", type=float, default=DELTA_WEIGHT, help="Weight for delta")
+    parser.add_argument("--prefix", default=None, help="Prefix for output files")
+    parser.add_argument("--discount", type=float, default=DISCOUNT_FACTOR, help="Weight for discount")
 
     return parser.parse_args()
 
@@ -278,28 +321,6 @@ def calculate_information_gain(
         plt.show(block=False)
 
 
-def draw_agent(map, origin, resolution, centre, size, yaw, visibility):
-
-    size_y, size_x = map.shape
-
-    x = int((centre[0] - origin[0]) / resolution + size_x // 2)
-    y = int((centre[1] - origin[1]) / resolution + size_y // 2)
-
-    # calculate the size of the rectangle in grid cells
-    half_x = int(np.ceil(size[0] / (2.0 * resolution)))
-    half_y = int(np.ceil(size[1] / (2.0 * resolution)))
-
-    cos_yaw = np.cos(yaw)
-    sin_yaw = np.sin(yaw)
-
-    for dx in range(-half_x, half_x + 1):
-        for dy in range(-half_y, half_y + 1):
-            _x = int(x + dx * cos_yaw - dy * sin_yaw)
-            _y = int(y + dx * sin_yaw + dy * cos_yaw)
-            if _x >= 0 and _x < GRID_SIZE and _y >= 0 and _y < GRID_SIZE:
-                map[_y, _x] = visibility
-
-
 def main():
 
     args = parse_args()
@@ -334,6 +355,17 @@ def main():
 
         bev_fig, bev_ax = plt.subplots(1, 1, num=FIG_LIDAR_MAP, figsize=(10, 10))
         bev_artist = None
+        control_plot_data = {
+            "figure": bev_fig,
+            "ax": bev_ax,
+            "our_line": None,
+            "andersen_line": None,
+            "higgins_line": None,
+            "none_line": None,
+            "ignore_line": None,
+            "nom_line": None,
+            "plot_backgrounds": [],
+        }
 
         # # # plot the ground truth trajectory and orientations of the vehicle
         # # traj_fig, traj_ax = plt.subplots(1, 1, num=FIG_TRAJECTORIES, figsize=(10, 10))
@@ -349,22 +381,30 @@ def main():
         # plt.show(block=False)
         # plt.pause(0.1)
 
+    plt.show(block=False)
+
     # construct the occupancy grid
     lmg = construct_laser_measurement_grid()
     dogm = construct_dynamic_occupancy_grid()
     occupancy_grid = None
     visibility_grid = VisibilityGrid(GRID_WIDTH, GRID_CELL_WIDTH, origin=(0, 0))
 
-    stage4 = time.time()
+    # initialize a controller
+    planning_horizon = int(args.planning_time * (1.0 / planner._dt))
+    controller = init_controller(args)
+    control = np.zeros((planning_horizon, 2))
+    last_control = np.zeros((planning_horizon, 2))
+
+    end = time.time()
 
     for step, data in enumerate(scenario):
 
         start = time.time()
-        print(f"Step: {step} -- Enumeration Time: {start - stage4:.3f} seconds")
+        print(f"Step: {step} -- Enumeration Time: {start - end:.3f} seconds")
 
         try:
             working_trajectories = planner.generate_trajectories(
-                trajectories_requested=3, planning_horizon=int(3 * (1.0 / planner._dt)), step=step
+                trajectories_requested=3, planning_horizon=planning_horizon, step=step
             )
         except ValueError as e:
             # finished trajectory
@@ -402,13 +442,111 @@ def main():
             trajectory=planner.get_planning_trajectory(),
             visibility=visibility_grid,
             occupancy=dyn_occ_grid,
-            planning_time=3.0,
-            planning_horizon=30,
+            planning_time=args.planning_time,
+            planning_horizon=planning_horizon,
             dt=0.1,
         )
 
         stage3 = time.time()
         print(f"    Information gain calculation time: {stage3 - stage2:.3f} seconds")
+
+        ignore_control, ignore_control_variations = get_control(
+            controller=controller,
+            costmap=visibility_grid,
+            occupancy=dyn_occ_grid,
+            u_nom=last_control,
+            trajectory=planner.get_planning_trajectory(),
+            target_speed=working_trajectories[0].s_d[-1],
+            planning_horizon=planning_horizon,
+            dt=planner._dt,
+            v=working_trajectories[0].s_d[0],
+            pos=data["pos"],
+            yaw=data["yaw"],
+            visible_agents=data["agents"],
+            method="Ignore",
+        )
+
+        none_control, none_control_variations = get_control(
+            controller=controller,
+            costmap=visibility_grid,
+            occupancy=dyn_occ_grid,
+            u_nom=last_control,
+            trajectory=planner.get_planning_trajectory(),
+            target_speed=working_trajectories[0].s_d[-1],
+            planning_horizon=planning_horizon,
+            dt=planner._dt,
+            v=working_trajectories[0].s_d[0],
+            pos=data["pos"],
+            yaw=data["yaw"],
+            visible_agents=data["agents"],
+            method="None",
+        )
+
+        our_control, out_control_variations = get_control(
+            controller=controller,
+            costmap=visibility_grid,
+            occupancy=dyn_occ_grid,
+            u_nom=last_control,
+            trajectory=planner.get_planning_trajectory(),
+            target_speed=working_trajectories[0].s_d[-1],
+            planning_horizon=planning_horizon,
+            dt=planner._dt,
+            v=working_trajectories[0].s_d[0],
+            pos=data["pos"],
+            yaw=data["yaw"],
+            visible_agents=data["agents"],
+            method="Ours",
+        )
+
+        andersen_control, andersen_control_variations = get_control(
+            controller=controller,
+            costmap=visibility_grid,
+            occupancy=dyn_occ_grid,
+            u_nom=last_control,
+            trajectory=planner.get_planning_trajectory(),
+            target_speed=working_trajectories[0].s_d[-1],
+            planning_horizon=planning_horizon,
+            dt=planner._dt,
+            v=working_trajectories[0].s_d[0],
+            pos=data["pos"],
+            yaw=data["yaw"],
+            visible_agents=data["agents"],
+            method="Andersen",
+        )
+
+        higgins_control, higgins_control_variations = get_control(
+            controller=controller,
+            costmap=visibility_grid,
+            occupancy=dyn_occ_grid,
+            u_nom=last_control,
+            trajectory=planner.get_planning_trajectory(),
+            target_speed=working_trajectories[0].s_d[-1],
+            planning_horizon=planning_horizon,
+            dt=planner._dt,
+            v=working_trajectories[0].s_d[0],
+            pos=data["pos"],
+            yaw=data["yaw"],
+            visible_agents=data["agents"],
+            method="Higgins",
+        )
+
+        stage4 = time.time()
+        print(f"    Control search time: {stage4 - stage3:.3f} seconds")
+
+        if DEBUG_MPC:
+
+            nom_traj = np.array([[x, y] for x, y in zip(working_trajectories[0].x, working_trajectories[0].y)])
+
+            # control_plot_data = visualize_variations(
+            #     plot_data=plot_data,
+            #     vehicle=controller.vehicle,
+            #     initial_state=(*data["pos"], working_trajectories[0].s_d[0], data["yaw"]),
+            #     nom_traj=nom_traj,
+            #     u_nom=last_control,
+            #     u_variations=control_variations,
+            #     u_weighted=control,
+            #     dt=planner._dt,
+            # )
 
         if DEBUG_TRAJECTORIES:
             # get the current map section
@@ -417,30 +555,49 @@ def main():
             # ---------------------------------------------------------
             # Draw updates
             # ---------------------------------------------------------
-            if bev_artist is None:
-                bev_artist = bev_ax.scatter(points[:, 0], points[:, 1], s=2, animated=True)
-                # plot the working trajectories
-                bev_traj_artist = []
-                for traj in working_trajectories:
-                    artist = bev_ax.plot(traj.x, traj.y, "b-", animated=True)
-                    bev_traj_artist.append(artist)
 
-                plt.pause(0.1)
-                # bg = bev_fig.canvas.copy_from_bbox(bev_ax.bbox)
+            if bev_artist is None:
+                bev_artist = bev_ax.scatter(points[:, 0], points[:, 1], s=4, animated=False)
+                # # plot the working trajectories
+                # bev_traj_artist = []
+                # for traj in working_trajectories:
+                #     artist = bev_ax.plot(traj.x, traj.y, "b-", animated=False)
+                #     bev_traj_artist.append(artist)
+
+                # plt.pause(0.1)
+                # # bg = bev_fig.canvas.copy_from_bbox(bev_ax.bbox)
                 bev_ax.draw_artist(bev_ax)
-                bev_fig.canvas.blit(bev_ax.bbox)
+                # bev_fig.canvas.blit(bev_ax.bbox)
 
             else:
                 bev_artist.set_offsets(points[:, :2])
 
-                for i, traj in enumerate(working_trajectories):
-                    bev_traj_artist[i][0].set_data(traj.x, traj.y)
-                # bev_fig.canvas.restore_region(bg)
+                # for i, traj in enumerate(working_trajectories):
+                #     bev_traj_artist[i][0].set_data(traj.x, traj.y)
+                # # bev_fig.canvas.restore_region(bg)
                 bev_ax.draw_artist(bev_artist)
-                for artist in bev_traj_artist:
-                    bev_ax.draw_artist(artist[0])
-                bev_fig.canvas.blit(bev_ax.bbox)
-                # bev_fig.canvas.flush_events()
+                # for artist in bev_traj_artist:
+                #     bev_ax.draw_artist(artist[0])
+
+            control_plot_data = visualize_controls(
+                plot_data=control_plot_data,
+                vehicle=controller.vehicle,
+                initial_state=(*data["pos"], working_trajectories[0].s_d[0], data["yaw"]),
+                nom_traj=nom_traj,
+                ours=our_control,
+                andersen=andersen_control,
+                higgins=higgins_control,
+                none=none_control,
+                ignore=ignore_control,
+                dt=planner._dt,
+            )
+
+            bev_fig.canvas.blit(bev_ax.bbox)
+
+            bev_ax.set_xlim(data["pos"][0] - LIDAR_RANGE / 4, data["pos"][0] + LIDAR_RANGE / 4)
+            bev_ax.set_ylim(data["pos"][1] - LIDAR_RANGE / 4, data["pos"][1] + LIDAR_RANGE / 4)
+            bev_fig.canvas.draw()
+            bev_fig.canvas.flush_events()
 
             # render the occupancy grids
             # occ_img = Image.fromarray((map * 255).astype(np.uint8)).convert("RGB")
@@ -449,10 +606,12 @@ def main():
             map_img = Image.fromarray(((1 - np.flipud(dyn_occ_grid)) * 255).astype(np.uint8)).convert("RGB")
             map_im.set_data(map_img)
 
-            now = time.time()
-            print(f"    Drawing time: {now - stage3:.3f} seconds")
-            print(f"Total time: {(now - stage4):.3f} seconds")
-            stage4 = now
+        last_control = control
+
+        now = time.time()
+        print(f"    Drawing time: {now - stage4:.3f} seconds")
+        print(f"Total time: {(now - end):.3f} seconds")
+        end = now
 
         plt.pause(0.1)
 

@@ -20,7 +20,7 @@ from Grid.GridMap import ProbabilityGrid
 CACHE_PATH = "v1/perception/1_4_3/training"
 MAP_PATH = "v1/maps"
 
-Z_MIN = 0.2
+Z_MIN = 0.75
 Z_MAX = 2.5
 
 
@@ -87,8 +87,6 @@ class Scenario:
         rotated = np.dot(frame_transform[0:3, 0:3], np.array([1, 0, 0]))
         yaw = np.arctan2(rotated[1], rotated[0]).astype(np.float32)
 
-        print(f"Yaw: {yaw}")
-
         dt = frame.timestamp_micros - self.last_time if self.last_time is not None else 0
         self.t += dt
         self.last_time = frame.timestamp_micros
@@ -108,7 +106,6 @@ class Scenario:
                 "lidar_points": obj.num_lidar_points_in_box,
             }
             agents.append(agent)
-            print(f"Agent: {agent['centre']}, {agent['size']}, {agent['yaw']}, {agent['type']}")
 
         result = {
             "t": self.t,

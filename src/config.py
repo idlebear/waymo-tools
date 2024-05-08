@@ -3,9 +3,10 @@ from numpy import pi as PI
 # --------------------------------------------------------------------------------
 # DEBUG flags
 # --------------------------------------------------------------------------------
-DEBUG_INFORMATION_GAIN = True
-DEBUG_VISIBILITY = True
+DEBUG_INFORMATION_GAIN = False
+DEBUG_VISIBILITY = False
 DEBUG_TRAJECTORIES = True
+DEBUG_MPC = True
 
 # --------------------------------------------------------------------------------
 # Figure Constants
@@ -16,6 +17,7 @@ FIG_DYNAMIC_OCCUPANCY_GRID = 3
 FIG_TRAJECTORIES = 4
 FIG_VISIBILITY = 5
 FIG_VISIBILITY_COSTMAP = 6
+FIG_MPC = 7
 
 
 # --------------------------------------------------------------------------------
@@ -36,7 +38,7 @@ LIDAR_INCREMENT = (PI * 2.0) / LIDAR_RAYS
 # Grid Constants
 # --------------------------------------------------------------------------------
 GRID_WIDTH = 2 * LIDAR_RANGE
-GRID_CELL_WIDTH = 0.5
+GRID_CELL_WIDTH = 0.16
 GRID_SIZE = int(GRID_WIDTH / GRID_CELL_WIDTH)
 
 LIDAR_LOWER_X_BOUND = -GRID_WIDTH / 2
@@ -62,3 +64,20 @@ OCCUPANCY_THRESHOLD = 0.6
 RISK_THRESHOLD = 0.1
 
 LANE_WIDTH = 4.0
+
+# ---------------------------------------------
+# MPC/MPPI parameters
+# ---------------------------------------------
+DISCOUNT_FACTOR = 1.0  # discount cost over the horizon
+X_WEIGHT = 250.0
+Y_WEIGHT = 250.0
+V_WEIGHT = 150.0
+THETA_WEIGHT = 10.0
+CONTROL_VARIATION_LIMITS = [5, PI / 6.0]
+CONTROL_LIMITS = [5, PI / 5.0]
+A_WEIGHT = 100
+DELTA_WEIGHT = 50
+DEFAULT_ACCELERATION = 4.0
+
+DEFAULT_METHOD_WEIGHT = 100.0
+DEFAULT_LAMBDA = 50000.0
