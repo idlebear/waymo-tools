@@ -69,57 +69,52 @@ def run_trajectory(vehicle, initial_state, controls, dt):
     return traj
 
 
-def visualize_controls(plot_data, vehicle, initial_state, nom_traj, ours, andersen, higgins, none, ignore, dt):
+def visualize_controls(plot_data, vehicle, initial_state, nom_traj, controls, dt):
     # visualizing!
 
+    colours = {
+        "ours": "blue",
+        "andersen": "red",
+        "higgins": "green",
+        "none": "orange",
+        "ignore": "pink",
+    }
+
+    new_plot = False
     if plot_data is None:
+        new_plot = True
         fig, ax = plt.subplots(num=FIG_MPC)
+
         plot_data = {
             "figure": fig,
             "ax": ax,
-            "our_line": None,
-            "andersen_line": None,
-            "higgins_line": None,
-            "none_line": None,
-            "ignore_line": None,
-            "nom_line": None,
             "plot_backgrounds": [],
         }
-
     else:
         fig = plot_data["figure"]
         ax = plot_data["ax"]
 
-    our_traj = run_trajectory(vehicle=vehicle, initial_state=initial_state, controls=ours, dt=dt)
-    andersen_traj = run_trajectory(vehicle=vehicle, initial_state=initial_state, controls=andersen, dt=dt)
-    higgins_traj = run_trajectory(vehicle=vehicle, initial_state=initial_state, controls=higgins, dt=dt)
-    none_traj = run_trajectory(vehicle=vehicle, initial_state=initial_state, controls=none, dt=dt)
-    ignore_traj = run_trajectory(vehicle=vehicle, initial_state=initial_state, controls=ignore, dt=dt)
-
-    # nom_traj = run_trajectory(vehicle=vehicle, initial_state=initial_state, controls=u_nom, dt=dt)
-
-    if plot_data["nom_line"] is None:
+    try:
+        plot_data["nom_line"][0].set_data(nom_traj[:, 0], nom_traj[:, 1])
+    except KeyError:
+        new_plot = True
         plot_data["nom_line"] = ax.plot(nom_traj[:, 0], nom_traj[:, 1], color="black", linestyle="--")
-        plot_data["our_line"] = ax.plot(our_traj[:, 0], our_traj[:, 1], color="blue")
-        plot_data["andersen_line"] = ax.plot(andersen_traj[:, 0], andersen_traj[:, 1], color="red")
-        plot_data["higgins_line"] = ax.plot(higgins_traj[:, 0], higgins_traj[:, 1], color="green")
-        plot_data["none_line"] = ax.plot(none_traj[:, 0], none_traj[:, 1], color="orange")
-        plot_data["ignore_line"] = ax.plot(ignore_traj[:, 0], ignore_traj[:, 1], color="pink")
 
+    for key, value in controls:
+        traj = run_trajectory(vehicle=vehicle, initial_state=initial_state, controls=value, dt=dt)
+        try:
+            plot_data[key][0].set_data(traj[:, 0], traj[:, 1])
+        except KeyError:
+            plot_data[key] = ax.plot(traj[:, 0], traj[:, 1], color=colours[key])
+
+    if new_plot:
         ax.axis("equal")
         plt.show(block=False)
     else:
-        plot_data["nom_line"][0].set_data(nom_traj[:, 0], nom_traj[:, 1])
-        plot_data["our_line"][0].set_data(our_traj[:, 0], our_traj[:, 1])
-        plot_data["andersen_line"][0].set_data(andersen_traj[:, 0], andersen_traj[:, 1])
-        plot_data["higgins_line"][0].set_data(higgins_traj[:, 0], higgins_traj[:, 1])
-        plot_data["none_line"][0].set_data(none_traj[:, 0], none_traj[:, 1])
-        plot_data["ignore_line"][0].set_data(ignore_traj[:, 0], ignore_traj[:, 1])
-
         ax.relim()
         ax.autoscale_view()
 
-        plt.pause(0.001)
+    plt.pause(0.001)
 
     return plot_data
 

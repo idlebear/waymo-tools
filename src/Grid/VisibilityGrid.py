@@ -37,6 +37,9 @@ class VisibilityGrid:
         dup.grid = np.array(self.grid)
         return dup
 
+    def reframe(self, pos):
+        return (int((pos[0] - self.origin[0]) / self.resolution), int((pos[1] - self.origin[1]) / self.resolution))
+
     def move_origin(self, new_origin):
         # calculate the offset that places the desired center in a block and
         # apply that shift to the stored value for the center.  The result is
@@ -112,6 +115,10 @@ class VisibilityGrid:
             return np.array(self.grid)
         finally:
             self.mutex.release()
+
+    def value(self, x, y):
+        (x, y) = self.reframe((x, y))
+        return self.grid[y, x]
 
     def decay(self, rate):
         self.mutex.acquire()

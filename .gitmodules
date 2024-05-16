@@ -1,3 +1,6 @@
 [submodule "third_party/APCM"]
 	path = third_party/APCM
 	url = https://github.com/idlebear/APCM.git
+[submodule "third_party/discrete-frechet"]
+	path = third_party/discrete-frechet
+	url = https://github.com/joaofig/discrete-frechet.git

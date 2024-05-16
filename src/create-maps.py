@@ -250,7 +250,7 @@ def main():
 
     for context in tqdm.tqdm(contexts):
         # load the dataset
-        dataset, context = load_dataset(cache, context, rng)
+         dataset, context = load_dataset(cache, context, rng)
 
         lmg = construct_laser_measurement_grid()
 
