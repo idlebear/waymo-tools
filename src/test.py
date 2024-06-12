@@ -9,7 +9,7 @@ warnings.simplefilter(action="ignore", category=FutureWarning)
 import numpy as np
 import os
 import itertools
-from math import ceil
+from math import ceil, sqrt
 import random
 import pandas as pd
 
@@ -23,16 +23,16 @@ if all_gpus:
     try:
         for cur_gpu in all_gpus:
             # BUGBUG - hack to limit tensorflow memory usage
-            tf.config.experimental.set_memory_growth(cur_gpu, True)
+            # tf.config.experimental.set_memory_growth(cur_gpu, True)
             tf.config.experimental.set_virtual_device_configuration(
                 cur_gpu,
-                [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1024 * 4)],
+                [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1024 * 12)],
             )
 
     except RuntimeError as e:
         print(e)
 
-from controller.controller import init_controller, get_control
+from controller.controller import init_controller, get_control, get_bb_vertices
 from controller.validate import (
     draw_agent,
     visualize_variations,
@@ -96,10 +96,10 @@ def parse_args():
     parser.add_argument("--context", type=str, default=None, help="Name of the context")
     parser.add_argument("--output-dir", type=str, default=".", help="Location to drop output files")
     parser.add_argument(
-        "--planning_time",
+        "--planning-time",
         metavar="horizon",
-        default=3,
-        type=int,
+        default=2.5,
+        type=float,
         help="Time horizon for planning (seconds)",
     )
     parser.add_argument(
@@ -110,7 +110,7 @@ def parse_args():
     )
     parser.add_argument("--trials", type=int, default=10, help="Repetitions for each context")
     parser.add_argument(
-        "--c_lambda",
+        "--c-lambda",
         type=float,
         default=DEFAULT_LAMBDA,
         help="Lambda value for weight normalization control",
@@ -125,7 +125,7 @@ def parse_args():
     )
     parser.add_argument(
         "--test-mode",
-        default="None",
+        default="trajectory",
         action="store",
         choices=[
             "mppi",
@@ -134,7 +134,7 @@ def parse_args():
         help="Test types",
     )
     parser.add_argument(
-        "--mppi_m",
+        "--mppi-m",
         type=float,
         default=DEFAULT_METHOD_WEIGHT,
         help="M/Lambda value for method weights",
@@ -148,7 +148,12 @@ def parse_args():
     parser.add_argument("--prefix", default=None, help="Prefix for output files")
     parser.add_argument("--discount", type=float, default=DISCOUNT_FACTOR, help="Weight for discount")
 
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if args.test_mode == "trajectory":
+        args.trials = 1
+
+    return args
 
 
 def construct_laser_measurement_grid():
@@ -426,32 +431,142 @@ def compare_controls(controller, control_records, dt):
     return [mean_diff_ours, mean_diff_higgins, mean_diff_andersen]
 
 
-def calculate_information_gain(costmap, trajectory):
+def convert_visible_agents(pos, visible_agents):
+    actors = []
+    distances = []
+
+    for agent in visible_agents:
+        # for each agent, collect the center, bounding box, radius, closest point, and distance from the ego vehicle
+        # BUGBUG -- this is a bit of a hack -- we're assuming the bounding box is a circle based on the width of the vehicle
+        #           and not the worst case length.  We need to represent agents as a series circles, but for now this should
+        #           be good enough.
+        extent = 1.0  # min(agent["size"][0:2]) / 2.0
+        x, y = agent["centre"][:2]
+        distance = sqrt((x - pos[0]) ** 2 + (y - pos[1]) ** 2)
+        distances.append(distance)
+
+        # Calculate the smallest angle to the bounding box -- used in the Andersen cost function
+        vertices = get_bb_vertices(agent)
+        min_pt = None
+        min_angle = np.pi / 2.0
+        for x, y in vertices:
+            angle = abs(np.arctan((y - pos[1]) / (x - pos[0])))
+            if angle < min_angle:
+                min_angle = angle
+                min_pt = (x, y)
+
+        actors.append(
+            [
+                x,
+                y,
+                extent,
+                min_pt[0],
+                min_pt[1],
+                sqrt((min_pt[0] - pos[0]) ** 2 + (min_pt[1] - pos[1]) ** 2),
+            ]
+        )
+    # sort the actors by distance from the ego vehicle
+    actors = [x for _, x in sorted(zip(distances, actors))]
+
+    actors = np.array(actors)
+    return actors
+
+
+from math import exp, log, acos, isnan, isinf
+
+
+def calculate_higgins_cost(agents, pos, scan_range):
+    r_fov = scan_range
+    r_fov_2 = r_fov * r_fov
+
+    value = 0.0
+    for agent in agents:
+        dx = agent[0] - pos[0]
+        dy = agent[1] - pos[1]
+        d_2 = dx * dx + dy * dy
+        d = sqrt(d_2)
+
+        inner = agent[2] / d * (r_fov_2 - d_2)
+        try:
+            inner_exp = exp(inner)
+            cost = log(1 + inner_exp)
+        except OverflowError:
+            cost = inner
+
+        value += cost * cost
+
+    # Higgins is a cost, but we sort in ascending order so the lowest value
+    # will be ranked first
+    return value
+
+
+def calculate_andersen_cost(agents, pos, v):
+
+    value = 0.0
+    for agent in agents:
+        dx = agent[3] - pos[0]
+        dy = agent[4] - pos[1]
+
+        dot = dx * v[0] + dy * v[1]
+        if dot > 0:
+            d = sqrt(dx * dx + dy * dy)
+            v_mag = sqrt(v[0] * v[0] + v[1] * v[1])
+
+            cost = acos(dot / (d * v_mag))
+            value += cost
+            break
+
+    # Andersen is a reward -- we want to sort in descending order or just
+    # invert the value
+    return -value
+
+
+def calculate_perception_gain(costmap, trajectory, agents, method):
     """
     Calculate the information gain of each trajectory based on the costmap
 
     """
-    value = 0.0
 
-    for x, y in zip(trajectory.x, trajectory.y):
-        value += costmap.value(x, y)
+    value = 0.0
+    for i, (x, y) in enumerate(zip(trajectory.x, trajectory.y)):
+        if i == 0:
+            continue
+        if method == "Ours":
+            value += costmap.value(x, y)
+            # we want the largest value to be first, so we negate the value
+            value = -value
+        elif method == "Higgins":
+            value += calculate_higgins_cost(agents, (x, y), LIDAR_RANGE)
+        elif method == "Andersen":
+            v = (trajectory.x[i] - trajectory.x[i - 1], trajectory.y[i] - trajectory.y[i - 1])
+            value += calculate_andersen_cost(agents, (x, y), v)
+        else:
+            raise ValueError(f"Unknown method: {method}")
 
     return value
 
 
-def evaluate_trajectories(context, trial, step, costmap, trajectories, fp):
+def evaluate_trajectories(context, trial, step, costmap, trajectories, visible_agents, methods, fp):
     """
     Evaluate the trajectories based on the costmap
     """
 
-    center_value = 0
-    for index, trajectory in enumerate(trajectories):
-        value = calculate_information_gain(costmap, trajectory)
-        if not index:
-            center_value = value
-        value -= center_value
+    agents = convert_visible_agents((trajectories[0].x[0], trajectories[0].y[0]), visible_agents)
 
-        fp.write(f"{context}, {trial}, {step}, {index}, {value}\n")
+    for method in methods:
+        values = []
+        for initial_v, trajectory in enumerate(trajectories):
+            value = calculate_perception_gain(costmap, trajectory, agents, method)
+            values.append(value)
+
+        # sort the values and get the index of the best trajectory
+        order = np.argsort(values)
+        ranking = np.zeros(len(trajectories), dtype=np.int32)
+        for i, x in enumerate(order):
+            ranking[x] = i
+
+        for index, value, rank in zip(range(len(trajectories)), values, ranking):
+            fp.write(f"{context}, {trial}, {step}, {method}, {index}, {value}, {value - values[0]}, {rank}\n")
 
 
 def evaluate_controls(
@@ -533,20 +648,27 @@ def main():
         }
         plt.show(block=False)
 
-    mppi_filename = f"mppi_results_{context}.csv"
-    mppi_title_str = "context,trial,step,method,euclidean,frechet\n"
-    mppi_filename = os.path.join(args.output_dir, mppi_filename)
-    mppi_fp = open(mppi_filename, "w")
-    mppi_fp.write(mppi_title_str)
+    if args.prefix is not None:
+        args.prefix = f"{args.prefix}-"
+    else:
+        args.prefix = ""
 
-    traj_filename = f"traj_results_{context}.csv"
-    traj_title_str = "context,trial,step,trajectory,value\n"
+    if args.test_mode == "mppi":
+        mppi_filename = f"{args.prefix}mppi_results.csv"
+        mppi_title_str = "context,trial,step,method,euclidean,frechet\n"
+        mppi_filename = os.path.join(args.output_dir, mppi_filename)
+        mppi_fp = open(mppi_filename, "w")
+        mppi_fp.write(mppi_title_str)
+
+    traj_filename = f"{args.prefix}traj_results.csv"
+    traj_title_str = "context,trial,step,method,trajectory,value,diff,order\n"
     traj_filename = os.path.join(args.output_dir, traj_filename)
     traj_fp = open(traj_filename, "w")
     traj_fp.write(traj_title_str)
 
     try:
         for context in contexts:
+            print(f"Processing context: {context}")
             for trial in range(args.trials):
                 try:
                     scenario = Scenario(context, cache_location, scan_params)
@@ -567,7 +689,6 @@ def main():
                 # initialize a controller
                 planning_horizon = int(args.planning_time * (1.0 / planner._dt))
                 controller = init_controller(args)
-                control = np.zeros((planning_horizon, 2))
                 last_controls = None
 
                 end = time.time()
@@ -632,82 +753,85 @@ def main():
                     stage3 = time.time()
                     # print(f"    Information gain calculation time: {stage3 - stage2:.3f} seconds")
 
-                    controls = evaluate_controls(
-                        context=context,
-                        trial=trial,
-                        step=step,
-                        controller=controller,
-                        costmap=visibility_grid,
-                        occupancy=dyn_occ_grid,
-                        u_nom=last_controls,
-                        trajectory=planner.get_planning_trajectory(),
-                        target_speed=working_trajectories[0].s_d[-1],
-                        planning_horizon=planning_horizon,
-                        dt=planner._dt,
-                        v=working_trajectories[0].s_d[0],
-                        pos=data["pos"],
-                        yaw=data["yaw"],
-                        visible_agents=data["agents"],
-                        methods=["Ours", "Higgins", "Andersen"],
-                        fp=mppi_fp,
-                    )
-
-                    if DEBUG_TRAJECTORIES:
-
-                        nom_traj = np.array(
-                            [
-                                [x, y]
-                                for x, y in zip(
-                                    working_trajectories[0].x,
-                                    working_trajectories[0].y,
-                                )
-                            ]
-                        )
-
-                        if bev_artist is None:
-                            bev_artist = bev_ax.scatter(points[:, 0], points[:, 1], s=4, animated=False)
-                            bev_ax.draw_artist(bev_ax)
-
-                        else:
-                            bev_artist.set_offsets(points[:, :2])
-                            bev_ax.draw_artist(bev_artist)
-
-                        control_plot_data = visualize_controls(
-                            plot_data=control_plot_data,
-                            vehicle=controller.vehicle,
-                            initial_state=(
-                                *data["pos"],
-                                working_trajectories[0].s_d[0],
-                                data["yaw"],
-                            ),
-                            nom_traj=nom_traj,
-                            controls=controls,
+                    if args.test_mode == "mppi":
+                        controls = evaluate_controls(
+                            context=context,
+                            trial=trial,
+                            step=step,
+                            controller=controller,
+                            costmap=visibility_grid,
+                            occupancy=dyn_occ_grid,
+                            u_nom=last_controls,
+                            trajectory=planner.get_planning_trajectory(),
+                            target_speed=working_trajectories[0].s_d[-1],
+                            planning_horizon=planning_horizon,
                             dt=planner._dt,
+                            v=working_trajectories[0].s_d[0],
+                            pos=data["pos"],
+                            yaw=data["yaw"],
+                            visible_agents=data["agents"],
+                            methods=["Ours", "Higgins", "Andersen"],
+                            fp=mppi_fp,
                         )
 
-                        bev_fig.canvas.blit(bev_ax.bbox)
+                        if DEBUG_TRAJECTORIES:
 
-                        bev_ax.set_xlim(
-                            data["pos"][0] - LIDAR_RANGE / 4,
-                            data["pos"][0] + LIDAR_RANGE / 4,
-                        )
-                        bev_ax.set_ylim(
-                            data["pos"][1] - LIDAR_RANGE / 4,
-                            data["pos"][1] + LIDAR_RANGE / 4,
-                        )
-                        bev_fig.canvas.draw()
-                        bev_fig.canvas.flush_events()
+                            nom_traj = np.array(
+                                [
+                                    [x, y]
+                                    for x, y in zip(
+                                        working_trajectories[0].x,
+                                        working_trajectories[0].y,
+                                    )
+                                ]
+                            )
 
-                        # map = scenario.get_map(
-                        #     (data["pos"][0], data["pos"][1]), GRID_SIZE, GRID_CELL_WIDTH
-                        # )
-                        # occ_img = Image.fromarray((map * 255).astype(np.uint8)).convert("RGB")
-                        # ref_im.set_data(occ_img)
+                            if bev_artist is None:
+                                bev_artist = bev_ax.scatter(points[:, 0], points[:, 1], s=4, animated=False)
+                                bev_ax.draw_artist(bev_ax)
 
-                        map_img = Image.fromarray(((1 - np.flipud(dyn_occ_grid)) * 255).astype(np.uint8)).convert("RGB")
-                        map_im.set_data(map_img)
+                            else:
+                                bev_artist.set_offsets(points[:, :2])
+                                bev_ax.draw_artist(bev_artist)
 
-                    last_controls = controls
+                            control_plot_data = visualize_controls(
+                                plot_data=control_plot_data,
+                                vehicle=controller.vehicle,
+                                initial_state=(
+                                    *data["pos"],
+                                    working_trajectories[0].s_d[0],
+                                    data["yaw"],
+                                ),
+                                nom_traj=nom_traj,
+                                controls=controls,
+                                dt=planner._dt,
+                            )
+
+                            bev_fig.canvas.blit(bev_ax.bbox)
+
+                            bev_ax.set_xlim(
+                                data["pos"][0] - LIDAR_RANGE / 4,
+                                data["pos"][0] + LIDAR_RANGE / 4,
+                            )
+                            bev_ax.set_ylim(
+                                data["pos"][1] - LIDAR_RANGE / 4,
+                                data["pos"][1] + LIDAR_RANGE / 4,
+                            )
+                            bev_fig.canvas.draw()
+                            bev_fig.canvas.flush_events()
+
+                            # map = scenario.get_map(
+                            #     (data["pos"][0], data["pos"][1]), GRID_SIZE, GRID_CELL_WIDTH
+                            # )
+                            # occ_img = Image.fromarray((map * 255).astype(np.uint8)).convert("RGB")
+                            # ref_im.set_data(occ_img)
+
+                            map_img = Image.fromarray(((1 - np.flipud(dyn_occ_grid)) * 255).astype(np.uint8)).convert(
+                                "RGB"
+                            )
+                            map_im.set_data(map_img)
+
+                        last_controls = controls
 
                     # evaluate the working trajectories based on the costmap
                     #
@@ -719,6 +843,8 @@ def main():
                             step=step,
                             costmap=visibility_grid,
                             trajectories=working_trajectories,
+                            visible_agents=data["agents"],
+                            methods=["Ours", "Higgins", "Andersen"],
                             fp=traj_fp,
                         )
 
@@ -734,7 +860,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        mppi_fp.close()
+        # if args.test_mode == "mppi":
+        #     mppi_fp.close()
         traj_fp.close()
 
 
