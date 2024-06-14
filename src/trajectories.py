@@ -50,7 +50,7 @@ from Grid.visibility_costmap import VisibilityGrid
 
 from config import *
 
-MIN_COLLISION_DISTANCE = 2.0
+MIN_COLLISION_DISTANCE = 1.0
 TTC_THRESHOLD = 0.75
 OCCLUSION_PENALTY = 5.0  # relatively large penalty for occlusion mismatch
 
@@ -63,6 +63,12 @@ def parse_args():
         help="Path to the directory with all components",
     )
     parser.add_argument("--seed", type=int, default=None, help="Seed for random number generation")
+    parser.add_argument(
+        "--collision-threshold",
+        type=float,
+        default=0.1,
+        help="Cutoff for collision response.  Occupancy values below the threshold are ignored",
+    )
     parser.add_argument("--context", type=str, default=None, help="Name of the context")
     parser.add_argument(
         "--occlusion-rate",
@@ -86,10 +92,22 @@ def parse_args():
         help="Number of MPPI samples to generate for each control input",
     )
     parser.add_argument(
+        "--steps",
+        type=int,
+        default=10,
+        help="Number of steps in the generated trajectory",
+    )
+    parser.add_argument(
         "--time-step",
         type=float,
         default=0.05,
         help="Time step discretization for simulation (seconds)",
+    )
+    parser.add_argument(
+        "--trajectories",
+        type=int,
+        default=10,
+        help="Number of trajectory samples to generate",
     )
     parser.add_argument("--trials", type=int, default=10, help="Repetitions for each context")
     parser.add_argument(
@@ -154,6 +172,24 @@ def check_collision( ego_trajectory, agent_trajectory ) -> Optional[int]:
         pass
 
     return None
+
+
+def calculate_pose_simularity(obs, pose):
+    euc_diff = np.linalg.norm(obs[0:2] - pose[0:2])
+    return np.exp(-euc_diff)
+
+def calculate_similarity_probability( obs, trajectories, step ):
+    next_probabilites = np.zeros(len(trajectories))
+    # calculate the similarity using Bayesian update and euclidean distance
+    for index, trajectory in enumerate(trajectories):
+        diff = calculate_pose_simularity(obs[step], trajectory[step])
+        next_probabilites[index] = diff
+
+    # normalize
+    next_probabilites /= np.sum(next_probabilites)
+    return next_probabilites
+
+
 
 
 def calculate_simularity(t1, occ1, t2, occ2):
@@ -243,7 +279,7 @@ def plot_trajectories(trajectories: "list[np.array]") -> None:
     fig, ax = plt.subplots()
 
     for trajectory in trajectories:
-        plt.plot(trajectory[:, 0], trajectory[:, 1])
+        plt.plot(trajectory[:, 0], trajectory[:, 1], marker='o')
 
     ax.axis("equal")
     plt.savefig( "trajectories.png" )
@@ -285,7 +321,7 @@ def main():
             directions=[(Direction.STRAIGHT, 1.0)],
             probabilities=[1.0],
             disturbance=0.00,
-            steps=10,
+            steps=args.steps,
             dt=args.time_step,
         )
         ego_trajectory = ego_trajectories[0]
@@ -293,23 +329,25 @@ def main():
         trajectories, controls = generate_trajectories(
             controller=controller,
             generator=rng,
-            initial_state=[4.0, -4.0, 5.0, np.pi / 2.0],
-            num_trajectories=10,
+            initial_state=[4.0, -3.0, 5.0, np.pi / 2.0],
+            num_trajectories=args.trajectories,
             control_range=(-np.pi / 5.0, np.pi / 5.0),
             directions=[
                 (Direction.LEFT, 0.5),
                 (Direction.LEFT, 0.3),
-                (Direction.RIGHT, 0.9),
+                (Direction.RIGHT, 0.95),
                 (Direction.RIGHT, 0.7),
                 (Direction.STRAIGHT, 1.0),
             ],
-            probabilities=[0.3, 0.0, 0.3, 0.0, 0.4],
+            probabilities=[0.5, 0.0, 0.5, 0.0, 0.0],
             # directions=[(Direction.STRAIGHT, 1.0)],
             # probabilities=[1.0],
             disturbance=0.1,
-            steps=10,
+            steps=args.steps,
             dt=args.time_step,
         )
+
+        plot_trajectories(trajectories=[ego_trajectory] + trajectories)
 
         for occ in [ 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9 ]:
             # generate occlusions for each trajectory
@@ -317,7 +355,7 @@ def main():
             for trajectory in trajectories:
                 occlusions.append(generate_occlusions(rng, occlusion_rate=occ, trajectory=trajectory))
 
-            plot_trajectories(trajectories=[ego_trajectory] + trajectories)
+            print(occlusions)
 
             # check for collisions
             collision_table = np.zeros([len(trajectories),])
@@ -326,43 +364,52 @@ def main():
                 collision_table[i] = collision
             print( collision_table )
 
-            # Each trajectory now needs to be evaluated for visibility -- for now we assume
-            # all are completely visible
-
-            # calculate the probability of each trajectory based on the potential for observations
-            # and the trajectory that occurs.
-
             trajectory_probabilities = []
-            collision_probabilities = []
+            stop_probabilities = []
             for obs_trajectory, obs_occlusion in zip( trajectories, occlusions ):
-                probability = np.zeros([len(trajectories), len(obs_trajectory) + 1])
+                probability = np.zeros([len(trajectories), len(obs_trajectory) ])
                 probability[:, 0] = np.ones(len(trajectories)) * (1.0 / len(trajectories))  # uniform distribution
 
-                step_collision_probability = []
+                step_stop_probability = []
                 for step in range(1, len(obs_trajectory)):
-                    for target_index, (target_trajectory, target_occlusion) in enumerate(zip(trajectories,occlusions)):
-                        euc_diff, _ = calculate_simularity(obs_trajectory[:step+1], obs_occlusion[:step+1],
-                                                                      target_trajectory[:step+1], target_occlusion[:step+1])
-                        probability[target_index, step] = np.exp(-euc_diff)
-                    # normalize
+
+                    if obs_occlusion[step]:
+                        # occluded -- find mean from all occluded trajectories
+                        occluded_probabilities = []
+
+                        for occ_index, occ_traj in enumerate(trajectories):
+                            if occlusions[occ_index][step]:
+                                occluded_probability = calculate_similarity_probability(occ_traj, trajectories=trajectories, step=step)
+                                occluded_probabilities.append(occluded_probability)
+
+                        occluded_probabilities = np.array(occluded_probabilities)
+                        probability[:, step] = np.mean(occluded_probabilities, axis=0)
+                    else:
+                        probability[:, step] = calculate_similarity_probability(obs_trajectory, trajectories=trajectories, step=step)
+
+                    # complete the Bayesian update by multiplying by the prior...
+                    probability[:, step] *= probability[:, step-1]
+
+                    # ...and then normalize
                     probability[:, step] /= np.sum(probability[:, step])
 
-                    collision_probability = 0
+                    stop_probability = 0
                     for target_index, target_trajectory in enumerate(trajectories):
-                        ttc = (collision_table[target_index] - step) * args.time_step if collision_table[target_index] is not None else np.inf
-                        if ttc < TTC_THRESHOLD:
-                            collision_probability += probability[target_index, step]
+                        ttc = None if collision_table[target_index] is None else (collision_table[target_index] - step) * args.time_step
+                        if ttc is not None and ttc < TTC_THRESHOLD and probability[target_index, step] > args.collision_threshold:
+                            stop_probability = 1
 
-                    step_collision_probability.append(collision_probability)
+                    step_stop_probability.append(stop_probability)
+
+                print(np.round(probability, 4))
 
                 trajectory_probabilities.append(probability)
-                collision_probabilities.append(step_collision_probability)
+                stop_probabilities.append(step_stop_probability)
 
-            collision_probabilities = np.array(collision_probabilities)
+            stop_probabilities = np.array(stop_probabilities)
+            stop_probabilities = np.mean(stop_probabilities, axis=0)
 
-            collision_probabilities = np.mean(collision_probabilities, axis=0)
-
-            print(collision_probabilities)
+            print(stop_probabilities)
 
     except KeyboardInterrupt:
         pass
