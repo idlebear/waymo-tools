@@ -46,11 +46,21 @@ if __name__ == "__main__":
     for index in indices:
         tfrecord = f"training.tfrecord-{index:05d}-of-01000"
         if not os.path.exists(os.path.join(cache_directory, tfrecord)):
-            os.system(f"echo bash download_v1_motion_scenario.sh ${args.cache} ${args.version} training {tfrecord}")
+            os.system(f"bash download_v1_motion_scenario.sh {args.cache} {args.version} training {tfrecord}")
         else:
             print(f"File {tfrecord} exists in cache.")
 
-    # BUGBUG -- Currently skipping the test dataset as MTR is not using it in their training process
+    num_test_records = 150
+    num_to_download = int(percentage_to_download * num_test_records)
+
+    # select the indices of the tfrecords to download
+    indices = generator.choice(num_test_records, num_to_download, replace=False)
+    for index in indices:
+        tfrecord = f"testing.tfrecord-{index:05d}-of-00150"
+        if not os.path.exists(os.path.join(cache_directory, tfrecord)):
+            os.system(f"bash download_v1_motion_scenario.sh {args.cache} {args.version} testing {tfrecord}")
+        else:
+            print(f"File {tfrecord} exists in cache.")
 
     num_validation_records = 150
     num_to_download = int(percentage_to_download * num_validation_records)
@@ -60,6 +70,6 @@ if __name__ == "__main__":
     for index in indices:
         tfrecord = f"validation.tfrecord-{index:05d}-of-00150"
         if not os.path.exists(os.path.join(cache_directory, tfrecord)):
-            os.system(f"bash download_v1_motion_scenario.sh ${args.cache} ${args.version} validation {tfrecord}")
+            os.system(f"bash download_v1_motion_scenario.sh {args.cache} {args.version} validation {tfrecord}")
         else:
             print(f"File {tfrecord} exists in cache.")
