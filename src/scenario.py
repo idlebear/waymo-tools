@@ -23,6 +23,8 @@ MAP_PATH = "v1/maps"
 Z_MIN = 0.75
 Z_MAX = 2.5
 
+from feature_maps import create_maps
+
 
 class Scenario:
     def __init__(self, context, cache_location, scan_params, logger=None):
@@ -39,6 +41,9 @@ class Scenario:
             self.map = pickle.load(f)
         self.start_pos = self.trajectory[0]
 
+        self.scenario_map_data = None
+        self.scenario_origin = None
+
         self.load_dataset()
         self.reset()
 
@@ -54,6 +59,16 @@ class Scenario:
         for data in self.dataset:
             frame = dataset_pb2.Frame()
             frame.ParseFromString(bytearray(data.numpy()))
+
+            if frame.map_features is not None and len(frame.map_features) > 0:
+                self.scenario_map_data, self.scenario_origin = create_maps(frame.map_features, pixels_per_meter=10)
+
+                # import matplotlib.pyplot as plt
+                # for i, layer in enumerate(self.scenario_map_data):
+                #     plt.figure(figsize=(10, 10), num=i)
+                #     plt.imshow(layer)
+                # plt.show(block=False)
+
             yield frame
 
     def reset(self):
