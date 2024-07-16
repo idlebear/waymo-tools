@@ -1,3 +1,9 @@
+# Description: This script creates maps from the Waymo Open Dataset. The maps are created using
+# a Dynamic Occupancy Grid based on the lidar data. The maps are saved as a pickle file
+# and a png image. The script can be run from the command line with the following command:
+#
+# python src/create-maps.py --cache_location ./cache --seed <seed>
+
 import json
 import pickle
 import tensorrt  # import before tensorflow to prevent TensorRT not found error
@@ -28,42 +34,11 @@ from dogm_py import renderMeasurement
 
 from Grid.GridMap import ProbabilityGrid
 
-FIG_LIDAR_MAP = 1
-FIG_OCCUPANCY_GRID = 2
-FIG_DYNAMIC_OCCUPANCY_GRID = 3
+from config import *
 
 DEFAULT_CACHE_LOC = "./cache"
 CACHE_PATH = "v1/perception/1_4_3/training"
 MAP_PATH = "v1/maps"
-
-
-LIDAR_RANGE = 75.0
-LIDAR_RAYS = 2650.0
-LIDAR_INCREMENT = (np.pi * 2.0) / LIDAR_RAYS
-
-GRID_WIDTH = 2 * LIDAR_RANGE
-GRID_CELL_WIDTH = 0.5
-GRID_SIZE = int(GRID_WIDTH / GRID_CELL_WIDTH)
-
-LIDAR_LOWER_X_BOUND = -GRID_WIDTH / 2
-LIDAR_LOWER_Y_BOUND = -GRID_WIDTH / 2
-LIDAR_LOWER_Z_BOUND = 0.0
-LIDAR_UPPER_X_BOUND = GRID_WIDTH / 2
-LIDAR_UPPER_Y_BOUND = GRID_WIDTH / 2
-LIDAR_UPPER_Z_BOUND = 5.0
-
-Z_MIN = 0.5
-Z_MAX = 2.0
-
-# the voxel map is scaled at 0.2 m/pixel -- use that value to scale the
-# voxel cube
-VOXEL_MAP_SCALE = 0.1
-VOXEL_MAP_X = int((LIDAR_UPPER_X_BOUND - LIDAR_LOWER_X_BOUND) / VOXEL_MAP_SCALE)
-VOXEL_MAP_Y = int((LIDAR_UPPER_Y_BOUND - LIDAR_LOWER_Y_BOUND) / VOXEL_MAP_SCALE)
-VOXEL_MAP_Z = int((LIDAR_UPPER_Z_BOUND - LIDAR_LOWER_Z_BOUND) / VOXEL_MAP_SCALE)
-
-OCCUPANCY_GRID_X = int((LIDAR_UPPER_X_BOUND - LIDAR_LOWER_X_BOUND) / GRID_CELL_WIDTH)
-OCCUPANCY_GRID_Y = int((LIDAR_UPPER_Y_BOUND - LIDAR_LOWER_Y_BOUND) / GRID_CELL_WIDTH)
 
 
 def update_occupancy_grid(occupancy_grid, measurements, pose_data):
@@ -89,6 +64,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Visualize Waymo Open Dataset")
     parser.add_argument("--cache_location", type=str, default=DEFAULT_CACHE_LOC, help="Cache location")
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
+    parser.add_argument("--context", type=str, default=None, help="Context to load")
 
     return parser.parse_args()
 
@@ -165,7 +141,7 @@ def convert_range_image_to_2D(frame, range_images, range_image_index, range_imag
     return ranges.numpy(), raw_points
 
 
-def get_contexts(cache_location: str):
+def get_contexts(cache_location: str, context: str = None):
     """Get the contexts from the cache location.
 
     Args:
@@ -176,9 +152,12 @@ def get_contexts(cache_location: str):
     """
 
     contexts = []
-    for filename in tf.io.gfile.glob(os.path.join(cache_location, "*.tfrecord")):
-        context = os.path.basename(filename)
-        contexts.append(context)
+    if context is None:
+        for filename in tf.io.gfile.glob(os.path.join(cache_location, "*.tfrecord")):
+            context = os.path.split(filename)[1]
+            contexts.append(context)
+    else:
+        contexts = [context]
 
     return contexts
 
@@ -197,9 +176,10 @@ def load_dataset(cache_location: str, context: str, rng: np.random.Generator):
 
     filename = None
     if context is not None:
-        print(f"Filtering dataset by context: {context}")
-        filename = os.path.join(cache_location, f"{context}.tfrecord")
-        if not tf.io.gfile.exists(filename):
+        filename = os.path.join(cache_location, f"{context}")
+        if tf.io.gfile.exists(filename):
+            print(f"Loading context: {context}")
+        else:
             print(f"Context {context} not found in cache.")
             filename = None
 
@@ -246,11 +226,11 @@ def main():
 
     # get the contexts from the cache
     cache = os.path.join(args.cache_location, CACHE_PATH)
-    contexts = get_contexts(cache)
+    contexts = get_contexts(cache, args.context)
 
     for context in tqdm.tqdm(contexts):
         # load the dataset
-         dataset, context = load_dataset(cache, context, rng)
+        dataset, context = load_dataset(cache, context, rng)
 
         lmg = construct_laser_measurement_grid()
 
