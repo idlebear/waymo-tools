@@ -20,7 +20,7 @@ from waymo_open_dataset.protos import map_pb2
 from waymo_open_dataset.utils.plot_maps import FeatureType
 
 MAP_MARGIN = 0
-LANE_WIDTH = 4.4
+LANE_WIDTH = 4.3
 WALKWAY_WIDTH = 3.0
 
 
@@ -90,29 +90,43 @@ def plot_driving_lanes(
         for data, feature_type in map_data:
             if feature_type in layer_group:
                 if feature_type == FeatureType.SURFACE_STREET_LANE:
-                    # Lanes are represented as centerline polylines.  To draw the lane, we draw a rectangle
-                    # around each point, rotated by the angle from the previous step.
+
+                    if len(data) < 2:
+                        continue
+
+                    # Lanes are represented as centerline polylines.  To draw the lane, calculate the left
+                    # and right edges based on the calculated orientation and the define lane width
+                    left_edge = []
+                    right_edge = []
+
+                    # extend the data by 1 meter at each end to make sure the lanes are closed with
+                    # each other
+                    theta = np.arctan2(data[1, 1] - data[0, 1], data[1, 0] - data[0, 0])
+                    st_pt = data[0, :2] - np.array([np.cos(theta), np.sin(theta)]) * 1.0
+
+                    theta = np.arctan2(data[-1, 1] - data[-2, 1], data[-1, 0] - data[-2, 0])
+                    end_pt = data[-1, :2] + np.array([np.cos(theta), np.sin(theta)]) * 1.0
+
+                    data = np.concatenate([st_pt.reshape(-1, 2), data[:, :2], end_pt.reshape(-1, 2)], axis=0)
+
                     for i in range(data.shape[0] - 1):
                         if i == 0:
                             theta = np.arctan2(data[i + 1, 1] - data[i, 1], data[i + 1, 0] - data[i, 0])
                         else:
                             theta = np.arctan2(data[i, 1] - data[i - 1, 1], data[i, 0] - data[i - 1, 0])
-                        box = np.array(
-                            [
-                                [-LANE_WIDTH / 2, -LANE_WIDTH / 2],
-                                [LANE_WIDTH / 2, -LANE_WIDTH / 2],
-                                [LANE_WIDTH / 2, LANE_WIDTH / 2],
-                                [-LANE_WIDTH / 2, LANE_WIDTH / 2],
-                            ]
+
+                        cos_norm = np.cos(theta + np.pi / 2.0)
+                        sin_norm = np.sin(theta + np.pi / 2.0)
+                        left_edge.append(
+                            (data[i, :2] - origin + np.array([cos_norm, sin_norm]) * (LANE_WIDTH / 2.0))
+                            * pixels_per_meter
                         )
-                        # rotate the box
-                        box = (
-                            np.dot(box, np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]))
-                            + data[i, :2]
+                        right_edge.append(
+                            (data[i, :2] - origin - np.array([cos_norm, sin_norm]) * (LANE_WIDTH / 2.0))
+                            * pixels_per_meter
                         )
-                        box = (pixels_per_meter * (box - origin)).astype(int)
-                        # draw the box
-                        cv2.fillPoly(map_layers[layer_num, ...], [box], 1)
+                    poly = np.concatenate([left_edge, np.flipud(right_edge)], axis=0).astype(int)
+                    cv2.fillPoly(map_layers[layer_num, ...], [poly], 1)
 
                 elif feature_type == FeatureType.CROSSWALK or feature_type == FeatureType.DRIVEWAY:
                     poly = (pixels_per_meter * (data[:, :2] - origin)).astype(int)
