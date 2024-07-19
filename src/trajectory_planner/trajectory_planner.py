@@ -10,7 +10,7 @@ DEFAULT_PLANNING_HORIZON = 10
 TICK = 0.1
 
 
-class TrajectoryPLanner:
+class TrajectoryPlanner:
     def __init__(self, data: np.ndarray) -> None:
         self._t = data[:, 0]
         self._waypoints = data[:, 2:4]

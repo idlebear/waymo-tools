@@ -174,47 +174,9 @@ def check_collision( ego_trajectory, agent_trajectory ) -> Optional[int]:
     return None
 
 
-def calculate_pose_simularity(obs, pose):
+def calculate_similarity(obs, pose):
     euc_diff = np.linalg.norm(obs[0:2] - pose[0:2])
     return np.exp(-euc_diff)
-
-def calculate_similarity_probability( obs, trajectories, step ):
-    next_probabilites = np.zeros(len(trajectories))
-    # calculate the similarity using Bayesian update and euclidean distance
-    for index, trajectory in enumerate(trajectories):
-        diff = calculate_pose_simularity(obs[step], trajectory[step])
-        next_probabilites[index] = diff
-
-    # normalize
-    next_probabilites /= np.sum(next_probabilites)
-    return next_probabilites
-
-
-
-
-def calculate_simularity(t1, occ1, t2, occ2):
-
-    # calculate the euclidean distance between the two trajectories
-    euc_diff = 0.0
-    for i in range(len(t1)):
-        if occ1[i] and occ2[i]:
-            # both occluded -- no information
-            continue
-        elif occ1[i] or occ2[i]:
-            # one occluded -- should be different
-            euc_diff += OCCLUSION_PENALTY
-        else:
-            euc_diff += np.linalg.norm(t1[i, 0:2] - t2[i, 0:2])
-    euc_diff /= len(t1)
-
-    # BUGBUG -- currently don't have a way to account for occlusions
-    #           in frechet distance calculation
-    #
-    # # calculate the frechet distance between the two trajectories
-    # frechet = FastDiscreteFrechetMatrix(euclidean)
-    # frechet_distance = frechet.distance(np.array(t1[:, :2]), np.array(t2[:, :2]))
-
-    return euc_diff, np.inf # frechet_distance
 
 
 class Direction(Enum):
@@ -288,11 +250,11 @@ def plot_trajectories(trajectories: "list[np.array]") -> None:
 def generate_occlusions( generator: np.random.Generator, occlusion_rate: float, trajectory: "list[list[float]]" ) -> "list[bool]":
     occlusions = []
     for i in range(len(trajectory)):
-        # if trajectory[i][0] > 4.1:
-        #     occluded = generator.choice([True, False], p=[occlusion_rate, 1.0 - occlusion_rate])
-        # else:
-        #     occluded = True
-        occluded = generator.choice([True, False], p=[occlusion_rate, 1.0 - occlusion_rate])
+        if trajectory[i][0] > 4.1:
+            occluded = generator.choice([True, False], p=[occlusion_rate, 1.0 - occlusion_rate])
+        else:
+            occluded = True
+        # occluded = generator.choice([True, False], p=[occlusion_rate, 1.0 - occlusion_rate])
         occlusions.append(occluded)
     return occlusions
 
@@ -339,7 +301,7 @@ def main():
                 (Direction.RIGHT, 0.7),
                 (Direction.STRAIGHT, 1.0),
             ],
-            probabilities=[0.5, 0.0, 0.5, 0.0, 0.0],
+            probabilities=[0.2, 0.0, 0.8, 0.0, 0.0],
             # directions=[(Direction.STRAIGHT, 1.0)],
             # probabilities=[1.0],
             disturbance=0.1,
@@ -349,13 +311,13 @@ def main():
 
         plot_trajectories(trajectories=[ego_trajectory] + trajectories)
 
-        for occ in [ 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9 ]:
+        for occ in [ 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0 ]:
             # generate occlusions for each trajectory
             occlusions = []
             for trajectory in trajectories:
                 occlusions.append(generate_occlusions(rng, occlusion_rate=occ, trajectory=trajectory))
 
-            print(occlusions)
+            # print(occlusions)
 
             # check for collisions
             collision_table = np.zeros([len(trajectories),])
@@ -366,31 +328,38 @@ def main():
 
             trajectory_probabilities = []
             stop_probabilities = []
-            for obs_trajectory, obs_occlusion in zip( trajectories, occlusions ):
+            for obs_index, obs_trajectory in enumerate( trajectories ):
                 probability = np.zeros([len(trajectories), len(obs_trajectory) ])
                 probability[:, 0] = np.ones(len(trajectories)) * (1.0 / len(trajectories))  # uniform distribution
 
                 step_stop_probability = []
                 for step in range(1, len(obs_trajectory)):
 
-                    if obs_occlusion[step]:
-                        # occluded -- find mean from all occluded trajectories
-                        occluded_probabilities = []
-
-                        for occ_index, occ_traj in enumerate(trajectories):
-                            if occlusions[occ_index][step]:
-                                occluded_probability = calculate_similarity_probability(occ_traj, trajectories=trajectories, step=step)
-                                occluded_probabilities.append(occluded_probability)
-
-                        occluded_probabilities = np.array(occluded_probabilities)
-                        probability[:, step] = np.mean(occluded_probabilities, axis=0)
+                    next_probabilites = np.zeros(len(trajectories))
+                    if occlusions[obs_index][step]:
+                        # occluded -- find the similarity to the other trajectories.  If they are occluded, then
+                        # the similarity is 1.0, otherwise, the similarity is mean similarity to all occulded trajectories
+                        # at this time step
+                        for index, trajectory in enumerate(trajectories):
+                            if occlusions[index][step]:
+                                next_probabilites[index] = 1.0
+                            else:
+                                occluded_count = 0
+                                for occ_index, occ_traj in enumerate(trajectories):
+                                    if occlusions[occ_index][step]:
+                                        next_probabilites[index] += calculate_similarity(occ_traj[index], trajectory[index])
+                                        occluded_count += 1
+                                next_probabilites[index] /= occluded_count
                     else:
-                        probability[:, step] = calculate_similarity_probability(obs_trajectory, trajectories=trajectories, step=step)
+                        # calculate the similarity using Bayesian update and euclidean distance
+                        for index, trajectory in enumerate(trajectories):
+                            next_probabilites[index] = calculate_similarity(obs_trajectory[step], trajectory[step])
 
-                    # complete the Bayesian update by multiplying by the prior...
-                    probability[:, step] *= probability[:, step-1]
+                        # normalize
+                        next_probabilites /= np.sum(next_probabilites)
 
-                    # ...and then normalize
+                    # complete the Bayesian update by multiplying by the prior and normalize
+                    probability[:, step] = next_probabilites * probability[:, step-1]
                     probability[:, step] /= np.sum(probability[:, step])
 
                     stop_probability = 0

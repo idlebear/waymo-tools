@@ -18,6 +18,8 @@ from PIL import Image
 import tensorrt
 import tensorflow as tf
 
+from tracker.tracker import Tracker
+
 all_gpus = tf.config.experimental.list_physical_devices("GPU")
 if all_gpus:
     try:
@@ -77,7 +79,7 @@ from dogm_py import renderMeasurement
 
 from Grid.GridMap import ProbabilityGrid
 from scenario import Scenario
-from trajectory_planner.trajectory_planner import TrajectoryPLanner
+from trajectory_planner.trajectory_planner import TrajectoryPlanner
 from Grid.visibility_costmap import update_visibility_costmap
 from Grid.visibility_costmap import VisibilityGrid
 
@@ -101,12 +103,6 @@ def parse_args():
         default=2.5,
         type=float,
         help="Time horizon for planning (seconds)",
-    )
-    parser.add_argument(
-        "--samples",
-        type=int,
-        default=1000,
-        help="Number of MPPI samples to generate for each control input",
     )
     parser.add_argument("--trials", type=int, default=10, help="Repetitions for each context")
     parser.add_argument(
@@ -147,6 +143,116 @@ def parse_args():
     parser.add_argument("--delta_weight", type=float, default=DELTA_WEIGHT, help="Weight for delta")
     parser.add_argument("--prefix", default=None, help="Prefix for output files")
     parser.add_argument("--discount", type=float, default=DISCOUNT_FACTOR, help="Weight for discount")
+
+    # trajectron args
+    parser.add_argument("--config", type=str, help="Configuration file for the model")
+    parser.add_argument("--model-iteration", type=int, help="Model version")
+    parser.add_argument("--model-dir", type=str, help="Location of the model files")
+    parser.add_argument("--attention-radius", type=float, default=3.0, help="Model version")
+    parser.add_argument("--device", type=str, default=None, help="Model version")
+    parser.add_argument("--samples", type=int, default=5, help="Model version")
+    parser.add_argument("--history-len", type=int, default=10, help="Model version")
+    parser.add_argument("--horizon", type=int, default=10, help="Model prediction horizon")
+    parser.add_argument("--incremental", help="Use Trajectron in online incremental mode", action="store_true")
+    parser.add_argument("--results-dir", type=str, help="Location of generated output")
+
+    # Model Parameters
+    parser.add_argument(
+        "--offline_scene_graph",
+        help="whether to precompute the scene graphs offline, options are 'no' and 'yes'",
+        type=str,
+        default="yes",
+    )
+
+    parser.add_argument(
+        "--dynamic_edges",
+        help="whether to use dynamic edges or not, options are 'no' and 'yes'",
+        type=str,
+        default="yes",
+    )
+
+    parser.add_argument(
+        "--edge_state_combine_method",
+        help="the method to use for combining edges of the same type",
+        type=str,
+        default="sum",
+    )
+
+    parser.add_argument(
+        "--edge_influence_combine_method",
+        help="the method to use for combining edge influences",
+        type=str,
+        default="attention",
+    )
+
+    parser.add_argument(
+        "--edge_addition_filter",
+        nargs="+",
+        help="what scaling to use for edges as they're created",
+        type=float,
+        default=[0.25, 0.5, 0.75, 1.0],
+    )  # We don't automatically pad left with 0.0, if you want a sharp
+    # and short edge addition, then you need to have a 0.0 at the
+    # beginning, e.g. [0.0, 1.0].
+
+    parser.add_argument(
+        "--edge_removal_filter",
+        nargs="+",
+        help="what scaling to use for edges as they're removed",
+        type=float,
+        default=[1.0, 0.0],
+    )  # We don't automatically pad right with 0.0, if you want a sharp drop off like
+    # the default, then you need to have a 0.0 at the end.
+
+    parser.add_argument(
+        "--override_attention_radius",
+        action="append",
+        help='Specify one attention radius to override. E.g. "PEDESTRIAN VEHICLE 10.0"',
+        default=[],
+    )
+
+    parser.add_argument(
+        "--incl_robot_node",
+        help="whether to include a robot node in the graph or simply model all agents",
+        action="store_true",
+    )
+
+    parser.add_argument("--map_encoding", help="Whether to use map encoding or not", action="store_true")
+
+    parser.add_argument("--augment", help="Whether to augment the scene during training", action="store_true")
+
+    parser.add_argument(
+        "--node_freq_mult_train",
+        help="Whether to use frequency multiplying of nodes during training",
+        action="store_true",
+    )
+
+    parser.add_argument(
+        "--node_freq_mult_eval",
+        help="Whether to use frequency multiplying of nodes during evaluation",
+        action="store_true",
+    )
+
+    parser.add_argument(
+        "--scene_freq_mult_train",
+        help="Whether to use frequency multiplying of nodes during training",
+        action="store_true",
+    )
+
+    parser.add_argument(
+        "--scene_freq_mult_eval",
+        help="Whether to use frequency multiplying of nodes during evaluation",
+        action="store_true",
+    )
+
+    parser.add_argument(
+        "--scene_freq_mult_viz",
+        help="Whether to use frequency multiplying of nodes during evaluation",
+        action="store_true",
+    )
+
+    parser.add_argument("--no_edge_encoding", help="Whether to use neighbors edge encoding", action="store_true")
+
 
     args = parser.parse_args()
 
@@ -287,7 +393,8 @@ def update_APCM(
     #     draw_agent(filtered_occupancy, self._pos, GRID_CELL_WIDTH, agent)
 
     # the current map removes all the unseen areas of the occupancy grid
-    current_map = scenario.get_map((trajectory.x[0], trajectory.y[0]), grid_size, GRID_CELL_WIDTH)
+    current_map = scenario.get_map((trajectory.x[0], trajectory.y[0]), grid_size)
+    current_map = np.maximum(current_map["PEDESTRIAN"], current_map["VEHICLE"]).astype(np.float32) / 255.0
     current_map[
         int(grid_size / 2 - GRID_SIZE / 2) : int(grid_size / 2 + GRID_SIZE / 2),
         int(grid_size / 2 - GRID_SIZE / 2) : int(grid_size / 2 + GRID_SIZE / 2),
@@ -678,7 +785,7 @@ def main():
 
                 trajectory = np.array(scenario.trajectory)
 
-                planner = TrajectoryPLanner(trajectory)
+                planner = TrajectoryPlanner(trajectory)
 
                 # construct the occupancy grid
                 lmg = construct_laser_measurement_grid()
@@ -690,6 +797,16 @@ def main():
                 planning_horizon = int(args.planning_time * (1.0 / planner._dt))
                 controller = init_controller(args)
                 last_controls = None
+
+                tracker = Tracker(
+                    initial_timestep=0,
+                    args=args,
+                    scenario_map=scenario.scenario_map_data,
+                    map_origin=scenario.map_origin,
+                    map_pixels_per_meter=scenario.map_pixels_per_meter,
+                    device="cuda:0",
+                    dt=scenario.dt,
+                )
 
                 end = time.time()
 
@@ -725,7 +842,18 @@ def main():
                     dyn_occ_grid = renderOccupancyGrid(dogm)
 
                     # draw in the agents
+                    tracker_update = []
                     for agent in data["agents"]:
+                        tracker_update.append(
+                            {
+                                "id": agent["id"],
+                                "type": agent["type"],
+                                "pos": agent["centre"],
+                                "size": agent["size"],
+                                "heading": agent["yaw"],
+                            }
+                        )
+
                         draw_agent(
                             dyn_occ_grid,
                             data["pos"],
@@ -735,6 +863,11 @@ def main():
                             agent["yaw"],
                             min(1.0, agent["top_lidar_points"] / 1000),
                         )
+
+                    tracker.step(tracker_update)
+
+                    tracker.plot_predictions( frame=step, futures=None, results_dir="./results" )
+
 
                     stage2 = time.time()
                     # print(f"    Occupancy grid update time: {stage2 - stage1:.3f} seconds")

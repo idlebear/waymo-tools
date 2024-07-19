@@ -20,7 +20,7 @@ from waymo_open_dataset.protos import map_pb2
 from waymo_open_dataset.utils.plot_maps import FeatureType
 
 MAP_MARGIN = 0
-LANE_WIDTH = 4.2
+LANE_WIDTH = 4.4
 WALKWAY_WIDTH = 3.0
 
 
@@ -138,11 +138,14 @@ def create_maps(map_features: List[map_pb2.MapFeature], pixels_per_meter: int = 
         pixels_per_meter=pixels_per_meter,
     )
 
-    pedestrian_layer = cv2.dilate(map_layers[0, ...], np.ones((3, 3)), iterations=int(pixels_per_meter * WALKWAY_WIDTH))
-    pedestrian_layer = pedestrian_layer - map_layers[0, ...]
-    map_layers[1, ...] = pedestrian_layer | map_layers[1, ...]
+    # TODO: Pedestrian space is currently created by expanding the driving lanes, then removing the driving lanes from the result
+    #       as there is no feature space in the map dedicated to pedestrians.  Ideally, we revisit this and create a separate
+    #       pedestrian space in the map proto.
+    pedestrian_layer = cv2.dilate(map_layers[0], np.ones((3, 3)), iterations=int(pixels_per_meter * WALKWAY_WIDTH))
+    pedestrian_layer = (255 * pedestrian_layer - map_layers[0]).astype(np.uint8)
 
     # rescale the map layers to 0-255
     map_layers = (255 * map_layers).astype(np.uint8)
 
-    return map_layers, origin
+    return { 'VEHICLE': np.stack( [ map_layers[0], map_layers[0], map_layers[0] ], axis=0 ),
+            'PEDESTRIAN': np.stack( [pedestrian_layer, map_layers[1], map_layers[0] ], axis=0 ) }, origin

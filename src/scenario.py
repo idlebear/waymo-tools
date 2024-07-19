@@ -37,12 +37,15 @@ class Scenario:
             self.data = json.load(f)
 
         self.trajectory = self.data["trajectory"]
+        self.dt = 0.1  # TODO: hardcoded, but could pull from cache: np.mean(np.diff(self._t) / 1.0e6)
+
         with open(f"{cache_location}/{MAP_PATH}/{self.data['map']}", "rb") as f:
             self.map = pickle.load(f)
         self.start_pos = self.trajectory[0]
 
         self.scenario_map_data = None
-        self.scenario_origin = None
+        self.map_origin = None
+        self.map_pixels_per_meter = 5
 
         self.load_dataset()
         self.reset()
@@ -61,7 +64,9 @@ class Scenario:
             frame.ParseFromString(bytearray(data.numpy()))
 
             if frame.map_features is not None and len(frame.map_features) > 0:
-                self.scenario_map_data, self.scenario_origin = create_maps(frame.map_features, pixels_per_meter=10)
+                self.scenario_map_data, self.map_origin = create_maps(
+                    frame.map_features, pixels_per_meter=self.map_pixels_per_meter
+                )
 
                 # import matplotlib.pyplot as plt
                 # for i, layer in enumerate(self.scenario_map_data):
@@ -113,12 +118,16 @@ class Scenario:
             agent_pos = np.dot(frame_transform, agent_pos)
 
             agent = {
+                "id": obj.id,
                 "centre": agent_pos[:3],
+                "type": "VEHICLE" if obj.type == 1 else "PEDESTRIAN",
                 "size": (obj.box.length, obj.box.width, obj.box.height),
                 "yaw": obj.box.heading + yaw,
                 "type": obj.type,
                 "top_lidar_points": obj.num_top_lidar_points_in_box,
                 "lidar_points": obj.num_lidar_points_in_box,
+                "detection": obj.detection_difficulty_level,
+                "tracking": obj.tracking_difficulty_level,
             }
             agents.append(agent)
 
@@ -205,7 +214,17 @@ class Scenario:
         # return ranges, raw_points
         return ranges, raw_points
 
-    def get_map(self, pos, size, scale):
-        map = self.map.get_probability_at((pos[0] - (size * scale) / 2.0, pos[1] - (size * scale) / 2.0), (size, size))
+    def get_map(self, pos, size):
+        # map = self.map.get_probability_at((pos[0] - (size * scale) / 2.0, pos[1] - (size * scale) / 2.0), (size, size))
+
+        x_min = ((pos[0] - size / 2.0) - self.map_origin[0]) * self.map_pixels_per_meter
+        x_max = x_min + size * self.map_pixels_per_meter
+        y_min = ((pos[1] - size / 2.0) - self.map_origin[1]) * self.map_pixels_per_meter
+        y_max = x_min + size * self.map_pixels_per_meter
+
+        map = {
+            "VEHICLE": np.maximum(self.scenario_map_data["VEHICLE"][x_min:x_max, y_min:y_max], axis=0),
+            "PEDESTRIAN": np.maximum(self.scenario_map_data["PEDESTRIAN"][x_min:x_max, y_min:y_max], axis=0),
+        }
 
         return map
