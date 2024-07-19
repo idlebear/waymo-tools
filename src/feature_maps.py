@@ -94,36 +94,13 @@ def plot_driving_lanes(
                     if len(data) < 2:
                         continue
 
-                    # # Lanes are represented as centerline polylines.  To draw the lane, we draw a rectangle
-                    # # around each point, rotated by the angle from the previous step.
-                    # for i in range(data.shape[0] - 1):
-                    #     if i == 0:
-                    #         theta = np.arctan2(data[i + 1, 1] - data[i, 1], data[i + 1, 0] - data[i, 0])
-                    #     else:
-                    #         theta = np.arctan2(data[i, 1] - data[i - 1, 1], data[i, 0] - data[i - 1, 0])
-                    # box = np.array(
-                    #     [
-                    #         [-LANE_WIDTH / 2, -LANE_WIDTH / 2],
-                    #         [LANE_WIDTH / 2, -LANE_WIDTH / 2],
-                    #         [LANE_WIDTH / 2, LANE_WIDTH / 2],
-                    #         [-LANE_WIDTH / 2, LANE_WIDTH / 2],
-                    #     ]
-                    # )
-                    # # rotate the box
-                    # box = (
-                    #     np.dot(box, np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]))
-                    #     + data[i, :2]
-                    # )
-                    # box = (pixels_per_meter * (box - origin)).astype(int)
-                    # # draw the box
-                    # cv2.fillPoly(map_layers[layer_num, ...], [box], 1)
-
                     # Lanes are represented as centerline polylines.  To draw the lane, calculate the left
                     # and right edges based on the calculated orientation and the define lane width
                     left_edge = []
                     right_edge = []
 
-                    # extend the data by one point to close the loop
+                    # extend the data by 1 meter at each end to make sure the lanes are closed with
+                    # each other
                     theta = np.arctan2(data[1, 1] - data[0, 1], data[1, 0] - data[0, 0])
                     st_pt = data[0, :2] - np.array([np.cos(theta), np.sin(theta)]) * 1.0
 
