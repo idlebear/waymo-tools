@@ -38,16 +38,16 @@ standardization = {
         "velocity": {
             "x": {"mean": 0, "std": 15},
             "y": {"mean": 0, "std": 15},
-            "norm": {"mean": 0, "std": 15},
+            # "norm": {"mean": 0, "std": 15},
         },
         "acceleration": {
             "x": {"mean": 0, "std": 4},
             "y": {"mean": 0, "std": 4},
-            "norm": {"mean": 0, "std": 4},
+            # "norm": {"mean": 0, "std": 4},
         },
         "heading": {
-            "x": {"mean": 0, "std": 1},
-            "y": {"mean": 0, "std": 1},
+            # "x": {"mean": 0, "std": 1},
+            # "y": {"mean": 0, "std": 1},
             "°": {"mean": 0, "std": np.pi},
             "d°": {"mean": 0, "std": 1},
         },
@@ -79,7 +79,6 @@ class Tracker:
         map_origin=None,
         map_pixels_per_meter=1,
         robot=None,
-        device=None,
         dt=1.0,
     ) -> None:
         self.scene = Scene(timesteps=initial_timestep + 1, map=map, dt=dt)
@@ -103,9 +102,9 @@ class Tracker:
 
             visualization_map = np.stack(
                 (
-                    np.maximum([scenario_map["VEHICLE"], scenario_map["PEDESTRIAN"]]),
+                    np.max(np.maximum(scenario_map["VEHICLE"], scenario_map["PEDESTRIAN"]), axis=0),
                     scenario_map["PEDESTRIAN"][1],
-                    np.maximum((scenario_map["PEDESTRIAN"]), axis=0),
+                    np.max((scenario_map["PEDESTRIAN"]), axis=0),
                 ),
                 axis=0,
             )
@@ -140,6 +139,7 @@ class Tracker:
                 # messing with the device allocation.
                 args.device = "cuda:0"
             args.device = torch.device(args.device)
+        self.device = args.device
 
         if args.config is None:
             raise ValueError("No configuration supplied!")
@@ -158,16 +158,16 @@ class Tracker:
         self.hyperparams["edge_addition_filter"] = args.edge_addition_filter
         self.hyperparams["edge_removal_filter"] = args.edge_removal_filter
         self.hyperparams["k_eval"] = args.k_eval
-        self.hyperparams["offline_scene_graph"] = args.offline_scene_graph
-        self.hyperparams["incl_robot_node"] = args.incl_robot_node
+        self.hyperparams["offline_scene_graph"] = False  # args.offline_scene_graph
+        self.hyperparams["incl_robot_node"] = False  # args.incl_robot_node
         self.hyperparams["edge_encoding"] = not args.no_edge_encoding
-        self.hyperparams["use_map_encoding"] = args.map_encoding
+        self.hyperparams["use_map_encoding"] = True  # args.map_encoding
 
-        self.model_registrar = ModelRegistrar(args.model_dir, device)
+        self.model_registrar = ModelRegistrar(args.model_dir, self.device)
         self.model_registrar.load_models(args.model_iteration)
 
         self.trajectron = OnlineTrajectron(
-            model_registrar=self.model_registrar, hyperparams=self.hyperparams, device=device
+            model_registrar=self.model_registrar, hyperparams=self.hyperparams, device=self.device
         )
         self.trajectron.set_environment(self.env, initial_timestep)
 
@@ -193,7 +193,7 @@ class Tracker:
                 self.agent_tracks[agent_id] = AgentTrack(
                     id=agent_id, agent_type=agent_type, history_length=self.history_len, dt=self.dt
                 )
-            x, y = agent["position"]
+            x, y = agent["pos"][:2]
             self.agent_tracks[agent_id].update(
                 [
                     [x - self.map_origin[0], y - self.map_origin[1], agent["heading"], self.timestep],
@@ -207,9 +207,11 @@ class Tracker:
                 track = self.agent_tracks[agent_id]
                 input_dict[track.node] = track.get(timestep=self.timestep, state=self.hyperparams["state"])
 
+            input_maps = self.get_maps_for_input(input_dict)
+
             dists, preds = self.trajectron.incremental_forward(
                 input_dict,
-                self.scenario_map,
+                maps=input_maps,
                 prediction_horizon=horizon,
                 num_samples=self.samples,
                 robot_present_and_future=None,
@@ -228,8 +230,58 @@ class Tracker:
         for agent_node, agent_prediction in preds.items():
             self.agent_tracks[agent_node.id].set_prediction(self.timestep + 1, agent_prediction)
 
-    def plot_predictions(self, frame, futures=None, results_dir=".", display_offset=0, display_diff=0):
-        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+    # borrowed from trajectron-plus-plus/trajectron/test_online.py
+    def get_maps_for_input(self, input_dict):
+        scene_maps = list()
+        scene_pts = list()
+        heading_angles = list()
+        patch_sizes = list()
+        nodes_with_maps = list()
+        for node in input_dict:
+            if node.type in self.hyperparams["map_encoder"]:
+                x = input_dict[node]
+                me_hyp = self.hyperparams["map_encoder"][node.type]
+                if "heading_state_index" in me_hyp:
+                    heading_state_index = me_hyp["heading_state_index"]
+                    # We have to rotate the map in the opposit direction of the agent to match them
+                    if type(heading_state_index) is list:  # infer from velocity or heading vector
+                        heading_angle = (
+                            -np.arctan2(x[-1, heading_state_index[1]], x[-1, heading_state_index[0]]) * 180 / np.pi
+                        )
+                    else:
+                        heading_angle = -x[-1, heading_state_index] * 180 / np.pi
+                else:
+                    heading_angle = None
+
+                scene_map = self.scene.map[node.type]
+                map_point = x[-1, :2]
+
+                patch_size = self.hyperparams["map_encoder"][node.type]["patch_size"]
+
+                scene_maps.append(scene_map)
+                scene_pts.append(map_point)
+                heading_angles.append(heading_angle)
+                patch_sizes.append(patch_size)
+                nodes_with_maps.append(node)
+
+        if heading_angles[0] is None:
+            heading_angles = None
+        else:
+            heading_angles = torch.Tensor(heading_angles)
+
+        maps = scene_maps[0].get_cropped_maps_from_scene_map_batch(
+            scene_maps,
+            scene_pts=torch.tensor(scene_pts, device="cpu"),
+            patch_size=patch_sizes[0],
+            rotation=heading_angles,
+            device=self.device,
+        )
+
+        maps_dict = {node: maps[[i]] for i, node in enumerate(nodes_with_maps)}
+        return maps_dict
+
+    def plot_predictions(self, ax, frame, futures=None, results_dir=".", display_offset=0, display_diff=0):
+        # fig, ax = plt.subplots(1, 1, figsize=(10, 10))
 
         for agent_node, agent_track in self.agent_tracks.items():
             agent_track.plot_prediction(ax, timestep=frame)
@@ -242,5 +294,5 @@ class Tracker:
         # ax.set_xlim(display_offset[0], display_offset[0] + display_diff)  # Adjust the x-axis limits
         # ax.set_ylim(display_offset[1], display_offset[1] + display_diff)  # Adjust the y-axis limits
 
-        plt.savefig(fig_path)
-        plt.close()
+        # plt.savefig(fig_path)
+        # plt.close()

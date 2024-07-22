@@ -17,8 +17,7 @@ from waymo_open_dataset.utils import transform_utils
 
 from Grid.GridMap import ProbabilityGrid
 
-CACHE_PATH = "v1/perception/1_4_3/training"
-MAP_PATH = "v1/maps"
+from config import CACHE_PATH, MAP_PATH
 
 Z_MIN = 0.75
 Z_MAX = 2.5
@@ -48,6 +47,17 @@ class Scenario:
         self.map_pixels_per_meter = 5
 
         self.load_dataset()
+        # load the first frame
+        for data in self.dataset:
+            frame = dataset_pb2.Frame()
+            frame.ParseFromString(bytearray(data.numpy()))
+
+            if frame.map_features is not None and len(frame.map_features) > 0:
+                self.scenario_map_data, self.map_origin = create_maps(
+                    frame.map_features, pixels_per_meter=self.map_pixels_per_meter
+                )
+            break
+
         self.reset()
 
     def load_dataset(self):
@@ -123,7 +133,6 @@ class Scenario:
                 "type": "VEHICLE" if obj.type == 1 else "PEDESTRIAN",
                 "size": (obj.box.length, obj.box.width, obj.box.height),
                 "yaw": obj.box.heading + yaw,
-                "type": obj.type,
                 "top_lidar_points": obj.num_top_lidar_points_in_box,
                 "lidar_points": obj.num_lidar_points_in_box,
                 "detection": obj.detection_difficulty_level,
@@ -217,14 +226,14 @@ class Scenario:
     def get_map(self, pos, size):
         # map = self.map.get_probability_at((pos[0] - (size * scale) / 2.0, pos[1] - (size * scale) / 2.0), (size, size))
 
-        x_min = ((pos[0] - size / 2.0) - self.map_origin[0]) * self.map_pixels_per_meter
-        x_max = x_min + size * self.map_pixels_per_meter
-        y_min = ((pos[1] - size / 2.0) - self.map_origin[1]) * self.map_pixels_per_meter
-        y_max = x_min + size * self.map_pixels_per_meter
+        x_min = int(((pos[0] - size / 2.0) - self.map_origin[0]) * self.map_pixels_per_meter)
+        x_max = int(x_min + size * self.map_pixels_per_meter)
+        y_min = int(((pos[1] - size / 2.0) - self.map_origin[1]) * self.map_pixels_per_meter)
+        y_max = int(x_min + size * self.map_pixels_per_meter)
 
         map = {
-            "VEHICLE": np.maximum(self.scenario_map_data["VEHICLE"][x_min:x_max, y_min:y_max], axis=0),
-            "PEDESTRIAN": np.maximum(self.scenario_map_data["PEDESTRIAN"][x_min:x_max, y_min:y_max], axis=0),
+            "VEHICLE": np.max(self.scenario_map_data["VEHICLE"][:, x_min:x_max, y_min:y_max], axis=0),
+            "PEDESTRIAN": np.max(self.scenario_map_data["PEDESTRIAN"][:, x_min:x_max, y_min:y_max], axis=0),
         }
 
         return map

@@ -145,16 +145,19 @@ def parse_args():
     parser.add_argument("--discount", type=float, default=DISCOUNT_FACTOR, help="Weight for discount")
 
     # trajectron args
+    parser.add_argument("--update-frequency", type=float, default=0.5, help="Model version")
+
     parser.add_argument("--config", type=str, help="Configuration file for the model")
     parser.add_argument("--model-iteration", type=int, help="Model version")
     parser.add_argument("--model-dir", type=str, help="Location of the model files")
     parser.add_argument("--attention-radius", type=float, default=3.0, help="Model version")
-    parser.add_argument("--device", type=str, default=None, help="Model version")
+    parser.add_argument("--device", type=str, default="cuda:0", help="CUDA device or CPU")
     parser.add_argument("--samples", type=int, default=5, help="Model version")
     parser.add_argument("--history-len", type=int, default=10, help="Model version")
     parser.add_argument("--horizon", type=int, default=10, help="Model prediction horizon")
     parser.add_argument("--incremental", help="Use Trajectron in online incremental mode", action="store_true")
     parser.add_argument("--results-dir", type=str, help="Location of generated output")
+    parser.add_argument("--k-eval", type=float, default=25.0, help="Model version")
 
     # Model Parameters
     parser.add_argument(
@@ -252,7 +255,6 @@ def parse_args():
     )
 
     parser.add_argument("--no_edge_encoding", help="Whether to use neighbors edge encoding", action="store_true")
-
 
     args = parser.parse_args()
 
@@ -804,7 +806,6 @@ def main():
                     scenario_map=scenario.scenario_map_data,
                     map_origin=scenario.map_origin,
                     map_pixels_per_meter=scenario.map_pixels_per_meter,
-                    device="cuda:0",
                     dt=scenario.dt,
                 )
 
@@ -864,10 +865,7 @@ def main():
                             min(1.0, agent["top_lidar_points"] / 1000),
                         )
 
-                    tracker.step(tracker_update)
-
-                    tracker.plot_predictions( frame=step, futures=None, results_dir="./results" )
-
+                    tracker.step(tracker_update, horizon=planning_horizon)
 
                     stage2 = time.time()
                     # print(f"    Occupancy grid update time: {stage2 - stage1:.3f} seconds")
@@ -939,6 +937,8 @@ def main():
                                 controls=controls,
                                 dt=planner._dt,
                             )
+
+                            tracker.plot_predictions(ax=bev_ax, frame=step, futures=None, results_dir="./results")
 
                             bev_fig.canvas.blit(bev_ax.bbox)
 

@@ -142,11 +142,12 @@ def create_maps(map_features: List[map_pb2.MapFeature], pixels_per_meter: int = 
         layers=[
             [
                 FeatureType.SURFACE_STREET_LANE,
+            ],
+            [
                 FeatureType.DRIVEWAY,
             ],
             [
                 FeatureType.CROSSWALK,
-                FeatureType.DRIVEWAY,
             ],
         ],
         pixels_per_meter=pixels_per_meter,
@@ -156,10 +157,16 @@ def create_maps(map_features: List[map_pb2.MapFeature], pixels_per_meter: int = 
     #       as there is no feature space in the map dedicated to pedestrians.  Ideally, we revisit this and create a separate
     #       pedestrian space in the map proto.
     pedestrian_layer = cv2.dilate(map_layers[0], np.ones((3, 3)), iterations=int(pixels_per_meter * WALKWAY_WIDTH))
-    pedestrian_layer = (255 * pedestrian_layer - map_layers[0]).astype(np.uint8)
+    pedestrian_layer = ((pedestrian_layer - map_layers[0]) | map_layers[2]).astype(np.uint8)
 
     # rescale the map layers to 0-255
     map_layers = (255 * map_layers).astype(np.uint8)
+    pedestrian_layer = (255 * pedestrian_layer).astype(np.uint8)
 
-    return { 'VEHICLE': np.stack( [ map_layers[0], map_layers[0], map_layers[0] ], axis=0 ),
-            'PEDESTRIAN': np.stack( [pedestrian_layer, map_layers[1], map_layers[0] ], axis=0 ) }, origin
+    map_layers = np.swapaxes(map_layers, 1, 2)  # x axis comes first
+    pedestrian_layer = np.swapaxes(pedestrian_layer, 0, 1)  # x axis comes first
+
+    return {
+        "VEHICLE": np.stack([map_layers[0], map_layers[1], map_layers[2]], axis=0),
+        "PEDESTRIAN": np.stack([pedestrian_layer, map_layers[1], map_layers[0]], axis=0),
+    }, origin

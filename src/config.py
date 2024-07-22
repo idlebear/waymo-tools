@@ -6,7 +6,7 @@ from numpy import pi as PI
 DEBUG_INFORMATION_GAIN = False
 DEBUG_VISIBILITY = False
 DEBUG_TRAJECTORIES = True
-DEBUG_MPC = True
+DEBUG_MPC = False
 
 # --------------------------------------------------------------------------------
 # Figure Constants
@@ -25,7 +25,7 @@ FIG_MPC = 7
 # --------------------------------------------------------------------------------
 DEFAULT_CACHE_LOC = "./cache"
 CACHE_PATH = "v1/perception/1_4_3/training"
-MAP_PATH = "maps"
+MAP_PATH = "v1/maps"
 
 # --------------------------------------------------------------------------------
 # LIDAR Constants
@@ -38,7 +38,7 @@ LIDAR_INCREMENT = (PI * 2.0) / LIDAR_RAYS
 # Grid Constants
 # --------------------------------------------------------------------------------
 GRID_WIDTH = 2 * LIDAR_RANGE
-GRID_CELL_WIDTH = 0.16
+GRID_CELL_WIDTH = 0.2
 GRID_SIZE = int(GRID_WIDTH / GRID_CELL_WIDTH)
 
 LIDAR_LOWER_X_BOUND = -GRID_WIDTH / 2

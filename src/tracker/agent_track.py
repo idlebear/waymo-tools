@@ -9,20 +9,28 @@ import pandas as pd
 from trajectron.environment import Environment, Scene, Node
 from trajectron.environment.data_utils import derivative_of
 
+from enum import IntEnum
+
 
 class AgentTrack:
+    class DataColumm(IntEnum):
+        X = 0
+        Y = 1
+        HEADING = 2
+        TIME = 3
+
     def __init__(self, id, agent_type, pos_data=None, history_length=10, dt=1.0):
         """
         agent_type: trajectron.environment.NodeType
         """
-        self.id = str(int(id))
+        self.id = str(id)
         self.node = Node(node_type=agent_type, node_id=self.id, data=None)
 
         self.history_length = history_length
         self.dt = dt
         self.current_index = 0
         self.buffer_size = history_length * 10
-        self.data = np.zeros((self.buffer_size, 3), dtype=object)  # x, y, t
+        self.data = np.zeros((self.buffer_size, 4), dtype=object)  # x, y, t
         self.prediction = None
 
         if pos_data is not None:
@@ -42,17 +50,17 @@ class AgentTrack:
         for row in pos_data:
             x, y, heading, t = row
 
-            while self.data[self.current_index - 1, 2] < t - 1:
-                self._insert(np.nan, np.nan, np.nan, self.data[self.current_index - 1, 2] + 1)
+            while self.data[self.current_index - 1, AgentTrack.DataColumm.TIME] < t - 1:
+                self._insert(np.nan, np.nan, np.nan, self.data[self.current_index - 1, AgentTrack.DataColumm.TIME] + 1)
             self._insert(x, y, heading, t)
 
         start_index = max(0, self.current_index - self.history_length)
-        while np.isnan(self.data[start_index, 0]):
+        while np.isnan(self.data[start_index, AgentTrack.DataColumm.X]):
             start_index += 1
 
-        x = self.data[start_index : self.current_index, 0].astype(float)
-        y = self.data[start_index : self.current_index, 1].astype(float)
-        heading = self.data[start_index : self.current_index, 2].astype(float)
+        x = self.data[start_index : self.current_index, AgentTrack.DataColumm.X].astype(float)
+        y = self.data[start_index : self.current_index, AgentTrack.DataColumm.Y].astype(float)
+        heading = self.data[start_index : self.current_index, AgentTrack.DataColumm.HEADING].astype(float)
         vx = derivative_of(x, self.dt)
         vy = derivative_of(y, self.dt)
         ax = derivative_of(vx, self.dt)
@@ -79,29 +87,31 @@ class AgentTrack:
                 ("position", "y"),
                 ("velocity", "x"),
                 ("velocity", "y"),
-                ("velocity", "norm"),
+                # ("velocity", "norm"),
                 ("acceleration", "x"),
                 ("acceleration", "y"),
-                ("acceleration", "norm"),
-                ("heading", "x"),
-                ("heading", "y"),
+                # ("acceleration", "norm"),
+                # ("heading", "x"),
+                # ("heading", "y"),
                 ("heading", "°"),
                 ("heading", "d°"),
             ]
-            node_data = np.hstack([
-                x.reshape(-1, 1),
-                y.reshape(-1, 1),
-                vx.reshape(-1, 1),
-                vy.reshape(-1, 1),
-                v_norm,
-                ax.reshape(-1, 1),
-                ay.reshape(-1, 1),
-                a_norm,
-                heading_x.reshape(-1, 1),
-                heading_y.reshape(-1, 1),
-                np.arctan2(heading_y, heading_x).reshape(-1, 1),
-                derivative_of(heading, self.dt, radian=True).reshape(-1, 1),
-            ])
+            node_data = np.hstack(
+                [
+                    x.reshape(-1, 1),
+                    y.reshape(-1, 1),
+                    vx.reshape(-1, 1),
+                    vy.reshape(-1, 1),
+                    # v_norm,
+                    ax.reshape(-1, 1),
+                    ay.reshape(-1, 1),
+                    # a_norm,
+                    # heading_x.reshape(-1, 1),
+                    # heading_y.reshape(-1, 1),
+                    heading.reshape(-1, 1),
+                    derivative_of(heading, self.dt, radian=True).reshape(-1, 1),
+                ]
+            )
         else:
             header = [
                 ("position", "x"),
@@ -122,7 +132,7 @@ class AgentTrack:
                 ]
             )
         self.node.overwrite_data(node_data, header)
-        self.node.first_timestep = self.data[start_index, 2]
+        self.node.first_timestep = self.data[start_index, AgentTrack.DataColumm.TIME]
 
     def _insert(self, x, y, heading, t):
         if self.current_index >= self.history_length:
