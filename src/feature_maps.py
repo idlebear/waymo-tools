@@ -132,12 +132,12 @@ def plot_driving_lanes(
                     poly = (pixels_per_meter * (data[:, :2] - origin)).astype(int)
                     cv2.fillPoly(map_layers[layer_num, ...], [poly], 1)
 
-    return map_layers, origin
+    return map_layers, origin, width, height
 
 
 def create_maps(map_features: List[map_pb2.MapFeature], pixels_per_meter: int = 1):
 
-    map_layers, origin = plot_driving_lanes(
+    map_layers, origin, width, height = plot_driving_lanes(
         map_features,
         layers=[
             [
@@ -166,7 +166,12 @@ def create_maps(map_features: List[map_pb2.MapFeature], pixels_per_meter: int = 
     map_layers = np.swapaxes(map_layers, 1, 2)  # x axis comes first
     pedestrian_layer = np.swapaxes(pedestrian_layer, 0, 1)  # x axis comes first
 
-    return {
-        "VEHICLE": np.stack([map_layers[0], map_layers[1], map_layers[2]], axis=0),
-        "PEDESTRIAN": np.stack([pedestrian_layer, map_layers[1], map_layers[0]], axis=0),
-    }, origin
+    return (
+        {
+            "VEHICLE": np.stack([map_layers[0], map_layers[1], map_layers[2]], axis=0),
+            "PEDESTRIAN": np.stack([pedestrian_layer, map_layers[1], map_layers[0]], axis=0),
+        },
+        origin,
+        width,
+        height,
+    )

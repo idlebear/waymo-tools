@@ -228,7 +228,7 @@ class Tracker:
         )
 
         for agent_node, agent_prediction in preds.items():
-            self.agent_tracks[agent_node.id].set_prediction(self.timestep + 1, agent_prediction)
+            self.agent_tracks[agent_node.id].set_prediction(self.timestep, agent_prediction)
 
     # borrowed from trajectron-plus-plus/trajectron/test_online.py
     def get_maps_for_input(self, input_dict):
@@ -280,19 +280,9 @@ class Tracker:
         maps_dict = {node: maps[[i]] for i, node in enumerate(nodes_with_maps)}
         return maps_dict
 
-    def plot_predictions(self, ax, frame, futures=None, results_dir=".", display_offset=0, display_diff=0):
-        # fig, ax = plt.subplots(1, 1, figsize=(10, 10))
-
+    def plot_predictions(self, ax, frame, futures=None):
         for agent_node, agent_track in self.agent_tracks.items():
             agent_track.plot_prediction(ax, timestep=frame)
 
-        if futures is not None:
-            for future in futures:
-                ax.plot(future[:, 0], future[:, 1], linestyle="--", color="black")
-
-        fig_path = os.path.join(results_dir, f"predictions_{frame:05d}.png")
-        # ax.set_xlim(display_offset[0], display_offset[0] + display_diff)  # Adjust the x-axis limits
-        # ax.set_ylim(display_offset[1], display_offset[1] + display_diff)  # Adjust the y-axis limits
-
-        # plt.savefig(fig_path)
-        # plt.close()
+            if futures is not None:
+                agent_track.plot_future(ax, timestep=frame)

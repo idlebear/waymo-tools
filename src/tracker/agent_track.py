@@ -152,6 +152,8 @@ class AgentTrack:
 
     def set_prediction(self, prediction_start, prediction):
         self.prediction = prediction
+        # find the mean x,y position across all predictions
+        self.prediction_mean = np.mean(prediction, axis=1).squeeze()
         self.prediction_start = prediction_start
 
     def get_prediction(self, prediction_start):
@@ -160,12 +162,21 @@ class AgentTrack:
         if prediction_start is not None:
             start_index = max(0, prediction_start - self.prediction_start)
         if self.prediction is None or start_index > M:
-            return None
+            return None, None
 
-        return self.prediction[0, :, start_index : start_index + M, :]
+        return (
+            self.prediction[0, :, start_index : start_index + M, :],
+            self.prediction_mean[start_index : start_index + M],
+        )
 
     def plot_prediction(self, ax, colour=None, timestep=None):
-        trajectories = self.get_prediction(timestep)
+        trajectories, prediction_mean = self.get_prediction(timestep)
         if trajectories is not None:
             for trajectory in trajectories:
-                ax.plot(trajectory[:, 0], trajectory[:, 1], label=f"agent_{self.id}")
+                if len(trajectory) > 0:
+                    ax.plot(
+                        [self.data[self.current_index - 1, AgentTrack.DataColumm.X], trajectory[0, 0]],
+                        [self.data[self.current_index - 1, AgentTrack.DataColumm.Y], trajectory[0, 1]],
+                    )
+                    ax.plot(trajectory[:, 0], trajectory[:, 1])
+            ax.plot(prediction_mean[:, 0], prediction_mean[:, 1], color="black", linestyle="dashed")

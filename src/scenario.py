@@ -53,9 +53,14 @@ class Scenario:
             frame.ParseFromString(bytearray(data.numpy()))
 
             if frame.map_features is not None and len(frame.map_features) > 0:
-                self.scenario_map_data, self.map_origin = create_maps(
+                self.scenario_map_data, self.map_origin, self.map_width, self.map_height = create_maps(
                     frame.map_features, pixels_per_meter=self.map_pixels_per_meter
                 )
+                # import matplotlib.pyplot as plt
+                # for i, layer in enumerate(self.scenario_map_data):
+                #     plt.figure(figsize=(10, 10), num=i)
+                #     plt.imshow(layer)
+                # plt.show(block=False)
             break
 
         self.reset()
@@ -72,18 +77,6 @@ class Scenario:
         for data in self.dataset:
             frame = dataset_pb2.Frame()
             frame.ParseFromString(bytearray(data.numpy()))
-
-            if frame.map_features is not None and len(frame.map_features) > 0:
-                self.scenario_map_data, self.map_origin = create_maps(
-                    frame.map_features, pixels_per_meter=self.map_pixels_per_meter
-                )
-
-                # import matplotlib.pyplot as plt
-                # for i, layer in enumerate(self.scenario_map_data):
-                #     plt.figure(figsize=(10, 10), num=i)
-                #     plt.imshow(layer)
-                # plt.show(block=False)
-
             yield frame
 
     def reset(self):
