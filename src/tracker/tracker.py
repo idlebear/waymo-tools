@@ -264,6 +264,9 @@ class Tracker:
                 patch_sizes.append(patch_size)
                 nodes_with_maps.append(node)
 
+        if len(heading_angles) == 0:
+            return {}  # no map nodes
+
         if heading_angles[0] is None:
             heading_angles = None
         else:
