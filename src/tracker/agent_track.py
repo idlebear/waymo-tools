@@ -151,13 +151,33 @@ class AgentTrack:
         return self.node
 
     def set_prediction(self, prediction_start, prediction):
-        self.prediction = prediction
+
+        prediction = prediction.squeeze()
+        try:
+            N, K, D = prediction.shape
+        except ValueError:
+            raise ValueError("Prediction must have shape (B, N, M, D) with B=1")
+
+        # insert the current pos (last state)
+        if not self.current_index:
+            raise ValueError("Created a prediction with no data!")
+        current = self.data[self.current_index - 1][:2]
+        current = np.concatenate([np.expand_dims(current, axis=0)] * N, axis=0)
+        prediction = np.concatenate([current[:, np.newaxis, :], prediction], axis=1)
+
         # find the mean x,y position across all predictions
         self.prediction_mean = np.mean(prediction, axis=1).squeeze()
+
+        # Find the yaw of the agent at each timestep
+        diffs = prediction[:, 1:, :] - prediction[:, :-1, :]
+        yaw = np.arctan2(diffs[:, :, 1], diffs[:, :, 0])
+        yaw = np.hstack([yaw[:, 0].reshape(-1, 1), yaw])
+        yaw = yaw[:, :, np.newaxis]
+        self.prediction = np.concatenate([prediction, yaw], axis=-1)
         self.prediction_start = prediction_start
 
     def get_prediction(self, prediction_start):
-        B, N, M, D = self.prediction.shape
+        N, M, D = self.prediction.shape
         start_index = 0
         if prediction_start is not None:
             start_index = max(0, prediction_start - self.prediction_start)
@@ -165,7 +185,7 @@ class AgentTrack:
             return None, None
 
         return (
-            self.prediction[0, :, start_index : start_index + M, :],
+            self.prediction[:, start_index : start_index + M, :],
             self.prediction_mean[start_index : start_index + M],
         )
 
@@ -174,9 +194,13 @@ class AgentTrack:
         if trajectories is not None:
             for trajectory in trajectories:
                 if len(trajectory) > 0:
-                    ax.plot(
-                        [self.data[self.current_index - 1, AgentTrack.DataColumm.X], trajectory[0, 0]],
-                        [self.data[self.current_index - 1, AgentTrack.DataColumm.Y], trajectory[0, 1]],
-                    )
                     ax.plot(trajectory[:, 0], trajectory[:, 1])
+                    # plot the yaw
+                    x, y, yaw = trajectory[0]
+                    ax.plot(
+                        [x, x + np.cos(yaw) * 2],
+                        [y, y + np.sin(yaw) * 2],
+                        color="blue",
+                        linestyle="dashed",
+                    )
             ax.plot(prediction_mean[:, 0], prediction_mean[:, 1], color="black", linestyle="dashed")
