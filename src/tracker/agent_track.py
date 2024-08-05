@@ -16,8 +16,10 @@ class AgentTrack:
     class DataColumm(IntEnum):
         X = 0
         Y = 1
-        HEADING = 2
-        TIME = 3
+        DX = 2
+        DY = 3
+        HEADING = 4
+        TIME = 5
 
     def __init__(self, id, agent_type, pos_data=None, history_length=10, dt=1.0):
         """
@@ -49,10 +51,16 @@ class AgentTrack:
 
         for row in pos_data:
             x, y, heading, t = row
+            if self.current_index:
+                dx = (x - self.data[self.current_index - 1, AgentTrack.DataColumm.X])/self.dt
+                dy = (y - self.data[self.current_index - 1, AgentTrack.DataColumm.Y])/self.dt
+            else:
+                dx = 0
+                dy = 0
 
             while self.data[self.current_index - 1, AgentTrack.DataColumm.TIME] < t - 1:
-                self._insert(np.nan, np.nan, np.nan, self.data[self.current_index - 1, AgentTrack.DataColumm.TIME] + 1)
-            self._insert(x, y, heading, t)
+                self._insert(np.nan, np.nan, np.nan, np.nan, np.nan, self.data[self.current_index - 1, AgentTrack.DataColumm.TIME] + 1)
+            self._insert(x, y, dx, dy, heading, t)
 
         start_index = max(0, self.current_index - self.history_length)
         while np.isnan(self.data[start_index, AgentTrack.DataColumm.X]):
@@ -60,11 +68,11 @@ class AgentTrack:
 
         x = self.data[start_index : self.current_index, AgentTrack.DataColumm.X].astype(float)
         y = self.data[start_index : self.current_index, AgentTrack.DataColumm.Y].astype(float)
+        dx = self.data[start_index : self.current_index, AgentTrack.DataColumm.DX].astype(float)
+        dy = self.data[start_index : self.current_index, AgentTrack.DataColumm.DY].astype(float)
         heading = self.data[start_index : self.current_index, AgentTrack.DataColumm.HEADING].astype(float)
-        vx = derivative_of(x, self.dt)
-        vy = derivative_of(y, self.dt)
-        ax = derivative_of(vx, self.dt)
-        ay = derivative_of(vy, self.dt)
+        ax = derivative_of(dx, self.dt)
+        ay = derivative_of(dy, self.dt)
 
         # data_dict = {
         #     ("position", "x"): x,
@@ -75,8 +83,8 @@ class AgentTrack:
         #     ("acceleration", "y"): ay,
         # }
         if self.node.type == "VEHICLE":
-            v = np.stack((vx, vy), axis=-1)
-            v_norm = np.linalg.norm(np.stack((vx, vy), axis=-1), axis=-1, keepdims=True)
+            v = np.stack((dx, dy), axis=-1)
+            v_norm = np.linalg.norm(np.stack((dx, dy), axis=-1), axis=-1, keepdims=True)
             a_norm = np.linalg.norm(np.stack((ax, ay), axis=-1), axis=-1, keepdims=True)
             heading_v = np.divide(v, v_norm, out=np.zeros_like(v), where=(v_norm > 1.0))
             heading_x = heading_v[:, 0]
@@ -100,8 +108,8 @@ class AgentTrack:
                 [
                     x.reshape(-1, 1),
                     y.reshape(-1, 1),
-                    vx.reshape(-1, 1),
-                    vy.reshape(-1, 1),
+                    dx.reshape(-1, 1),
+                    dy.reshape(-1, 1),
                     # v_norm,
                     ax.reshape(-1, 1),
                     ay.reshape(-1, 1),
@@ -125,8 +133,8 @@ class AgentTrack:
                 [
                     x.reshape(-1, 1),
                     y.reshape(-1, 1),
-                    vx.reshape(-1, 1),
-                    vy.reshape(-1, 1),
+                    dx.reshape(-1, 1),
+                    dy.reshape(-1, 1),
                     ax.reshape(-1, 1),
                     ay.reshape(-1, 1),
                 ]
@@ -134,14 +142,14 @@ class AgentTrack:
         self.node.overwrite_data(node_data, header)
         self.node.first_timestep = self.data[start_index, AgentTrack.DataColumm.TIME]
 
-    def _insert(self, x, y, heading, t):
+    def _insert(self, x, y, dx, dy, heading, t):
         if self.current_index >= self.history_length:
             preserved_len = max(0, self.history_length - 1)
             roll_back = max(0, self.current_index - preserved_len)
             self.data = np.roll(self.data, -roll_back, axis=0)
             self.current_index = preserved_len
 
-        self.data[self.current_index] = [x, y, heading, t]
+        self.data[self.current_index] = [x, y, dx, dy, heading, t]
         self.current_index += 1
 
     def get(self, timestep, state):
@@ -161,19 +169,23 @@ class AgentTrack:
         # insert the current pos (last state)
         if not self.current_index:
             raise ValueError("Created a prediction with no data!")
-        current = self.data[self.current_index - 1][:2]
+        self.prediction = np.zeros((N, K + 1, D), dtype=float)
+        current = self.data[self.current_index - 1][:AgentTrack.DataColumm.TIME]
         current = np.concatenate([np.expand_dims(current, axis=0)] * N, axis=0)
-        prediction = np.concatenate([current[:, np.newaxis, :], prediction], axis=1)
+        self.prediction[N,0,...] = current
+        self.prediction[:,:,:2] = prediction
+
+        # Find the velocity vector
+        diffs = prediction[:, 1:, :2] - prediction[:, :-1, :2]
+        dx = diffs / self.dt
+        self.prediction[:, 1:, AgentTrack.DataColumm.DX:AgentTrack.DataColumm.DY+1] = dx
+
+        # Find the yaw of the agent at each timestep
+        yaw = np.arctan2(diffs[:, :, AgentTrack.DataColumm.Y], diffs[:, :, AgentTrack.DataColumm.X])
+        self.prediction[:, 1:, AgentTrack.DataColumm.HEADING] = yaw
 
         # find the mean x,y position across all predictions
         self.prediction_mean = np.mean(prediction, axis=1).squeeze()
-
-        # Find the yaw of the agent at each timestep
-        diffs = prediction[:, 1:, :] - prediction[:, :-1, :]
-        yaw = np.arctan2(diffs[:, :, 1], diffs[:, :, 0])
-        yaw = np.hstack([yaw[:, 0].reshape(-1, 1), yaw])
-        yaw = yaw[:, :, np.newaxis]
-        self.prediction = np.concatenate([prediction, yaw], axis=-1)
         self.prediction_start = prediction_start
 
     def get_prediction(self, prediction_start):
