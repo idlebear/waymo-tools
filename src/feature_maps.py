@@ -19,7 +19,7 @@ import tensorflow as tf
 from waymo_open_dataset.protos import map_pb2
 from waymo_open_dataset.utils.plot_maps import FeatureType
 
-MAP_MARGIN = 0
+MAP_MARGIN = 100
 LANE_WIDTH = 4.3
 WALKWAY_WIDTH = 3.0
 
@@ -175,3 +175,22 @@ def create_maps(map_features: List[map_pb2.MapFeature], pixels_per_meter: int = 
         width,
         height,
     )
+
+
+def render_map_features(ax, origin: List[float], features: List[map_pb2.MapFeature]):
+    for feature in features:
+        if feature.HasField("lane"):
+            points = list(feature.lane.polyline)
+            pts = np.array([[p.x - origin[0], p.y - origin[1]] for p in points])
+            ax.plot(pts[:, 0], pts[:, 1], "k-")
+        elif feature.HasField("crosswalk"):
+            points = list(feature.crosswalk.polygon)
+            pts = np.array([[p.x - origin[0], p.y - origin[1]] for p in points])
+            pts = np.vstack([pts, pts[0]])
+            ax.plot(pts[:, 0], pts[:, 1], "r-")
+        elif feature.HasField("driveway"):
+            points = list(feature.driveway.polygon)
+            pts = np.array([[p.x - origin[0], p.y - origin[1]] for p in points])
+            pts = np.vstack([pts, pts[0]])
+            ax.plot(pts[:, 0], pts[:, 1], "g-")
+    return ax
