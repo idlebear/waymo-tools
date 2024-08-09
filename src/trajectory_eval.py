@@ -182,7 +182,7 @@ def get_relative_velocity( av_velocity, agent_velocity ):
     return np.linalg.norm( av_velocity[:2] - agent_velocity[:2] )
 
 
-def time_to_collision( av_pos, av_size, av_velocity, agents, prediction_num, dt=0.1 ):
+def time_to_collision( av_pos, av_size, av_velocity, agents, prediction_num, beliefs, alpha=0.2, beta=1.0, dt=0.1 ):
     """
     Calculate the time to collision for the current trajectory with all of the listed agent
     trajectories.
@@ -199,11 +199,20 @@ def time_to_collision( av_pos, av_size, av_velocity, agents, prediction_num, dt=
 
     """
 
-    for agent in agents:
-        min_distance = get_min_distance( av_pos, av_size, agent["predictions"][:, prediction_num, :3], agent["size"] )
-        relative_velocity = get_relative_velocity( av_velocity, agent["predictions"][:, prediction_num, AgentTrack.DataColumn.DX:AgentTrack.DataColumm.DY+1] )
+    collision_probs = np.zeros( len(agents) )
+    for ai, agent in enumerate(agents):
+        collision_count = 0
+        for ti, trajectory in enumerate( agent["predictions"] ):
+            if beliefs[agent["id"][ti]] > alpha:
+                min_distance = get_min_distance( av_pos, av_size, agent["predictions"][:, prediction_num, :3], agent["size"] )
+                relative_velocity = get_relative_velocity( av_velocity, agent["predictions"][:, prediction_num, AgentTrack.DataColumn.DX:AgentTrack.DataColumm.DY+1] )
+                ttc = min_distance / relative_velocity if relative_velocity > 0 else np.inf
+                if ttc < beta:
+                    collision_count += 1
+        collision_probs[ai] = float(collision_count) / float(len( agent["predictions"] ))
 
-        ttc = min_distance / relative_velocity if relative_velocity > 0 else np.inf
+    return collision_probs
+
 
 
 
@@ -225,7 +234,6 @@ def evaluate_trajectory( scenario, trajectory, agents, num_predictions=1, predic
     trajectory_steps = trajectory.shape[0]
 
     for agent in agents:
-
         prediction = agent.get_predictions()
         N, K, D = prediction.shape
 
@@ -272,8 +280,11 @@ def evaluate_trajectory( scenario, trajectory, agents, num_predictions=1, predic
             # normalize the belief
             belief[k, :] = belief[k, :] / np.sum(belief[k, :])
 
-
-    # now evaluate each trajectory for the probability of stopping based on TTC > beta and occupancy/belief > alpha
+    # now evaluate each time step for the probability of stopping based on TTC > beta and occupancy/belief > alpha
+    collision_probs = np.zeros( [K, len(agents)] )
+    for k in range(K):
+        collision_probs[k, :] = time_to_collision( trajectory[k, :3], agents, k, beliefs, alpha=0.2, beta=1.0, dt=dt )
 
     # return the mean probability of stopping over all agents and the min stopping time
+    return np.mean( collision_probs, axis=1 ), np.min( collision_probs, axis=1 ), np.sum( collision_probs, axis=1 )
 
